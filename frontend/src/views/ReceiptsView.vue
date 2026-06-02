@@ -1,0 +1,464 @@
+<template>
+  <section class="page-stack">
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <el-select v-model="customerFilter" filterable clearable placeholder="客户筛选">
+          <el-option v-for="customer in customers" :key="customer.id" :label="customer.name" :value="customer.id" />
+        </el-select>
+        <el-input v-model="cylinderFilter" placeholder="版号筛选" clearable />
+        <el-button :icon="Refresh" @click="loadAll">刷新</el-button>
+      </div>
+      <div class="toolbar-left">
+        <el-button type="primary" :icon="Plus" v-permission="'finance:payment:create'" @click="receiptVisible = true">登记日收入</el-button>
+        <el-button type="success" :icon="Calendar" v-permission="'finance:month_close'" @click="closeMonth">月末汇总</el-button>
+        <el-button :icon="Download" v-permission="'report:export'" @click="exportDailyReceipts">导出日收入</el-button>
+        <el-button :icon="Download" v-permission="'report:export'" @click="exportMonthlyReceipts">导出版号月结</el-button>
+        <el-button :icon="Download" v-permission="'report:export'" @click="exportCustomerStatements">导出客户账单</el-button>
+      </div>
+    </div>
+
+    <div class="form-grid">
+      <el-card shadow="never" class="panel-card">
+        <template #header>
+          <div class="panel-title">
+            <span>月结操作</span>
+          </div>
+        </template>
+        <el-form label-position="top">
+          <el-form-item label="汇总月份">
+            <el-date-picker v-model="monthCloseDate" value-format="YYYY-MM-DD" type="month" />
+          </el-form-item>
+          <el-form-item label="客户账单">
+            <el-select v-model="statementForm.customer_id" filterable clearable placeholder="选择客户">
+              <el-option v-for="customer in customers" :key="customer.id" :label="customer.name" :value="customer.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="勾选版号（逗号分隔）">
+            <el-input v-model="statementForm.cylinder_nos" placeholder="S26052340, S26052353" />
+          </el-form-item>
+          <el-button type="primary" :loading="creatingStatement" @click="createStatement">生成客户账单</el-button>
+          <el-button v-if="lastStatement" text type="primary" @click="printStatement(lastStatement.id)">打印 {{ lastStatement.statement_no }}</el-button>
+        </el-form>
+      </el-card>
+
+      <el-card shadow="never" class="panel-card">
+        <template #header>
+          <div class="panel-title">
+            <span>本页汇总</span>
+          </div>
+        </template>
+        <div class="receipt-summary">
+          <div><span>日收入合计</span><strong>{{ formatCurrency(receiptTotal) }}</strong></div>
+          <div><span>现金</span><strong>{{ formatCurrency(cashTotal) }}</strong></div>
+          <div><span>银行</span><strong>{{ formatCurrency(bankTotal) }}</strong></div>
+          <div><span>其他</span><strong>{{ formatCurrency(otherTotal) }}</strong></div>
+        </div>
+      </el-card>
+    </div>
+
+    <el-card shadow="never" class="table-card">
+      <template #header>
+        <div class="panel-title">
+          <span>日收入表</span>
+          <el-tag>{{ receipts.length }} 条</el-tag>
+        </div>
+      </template>
+      <el-table :data="receipts" stripe>
+        <el-table-column prop="receipt_no" label="收据号" min-width="150" />
+        <el-table-column label="客户" min-width="180">
+          <template #default="{ row }">{{ customerName(row.customer_id) }}</template>
+        </el-table-column>
+        <el-table-column prop="received_date" label="收款日期" width="120" />
+        <el-table-column prop="payment_method" label="方式" width="110" />
+        <el-table-column prop="total_amount" label="合计" width="120">
+          <template #default="{ row }">{{ formatCurrency(row.total_amount) }}</template>
+        </el-table-column>
+        <el-table-column label="版号分摊" min-width="220">
+          <template #default="{ row }">
+            <div class="tag-list">
+              <el-tag v-for="allocation in row.allocations" :key="allocation.id" effect="plain">
+                {{ allocation.cylinder_no }} · {{ formatCurrency(allocation.amount) }}
+              </el-tag>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="status" label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="row.status === 'checked' ? 'success' : 'warning'">{{ row.status === 'checked' ? '已审核' : '待审核' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="200" fixed="right">
+          <template #default="{ row }">
+            <el-button v-if="row.status !== 'checked'" text type="primary" @click="checkReceipt(row)">审核</el-button>
+            <el-button text type="primary" :disabled="row.status !== 'checked'" @click="printReceipt(row.id)">收据</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <el-card shadow="never" class="table-card">
+      <template #header>
+        <div class="panel-title">
+          <span>版号月结</span>
+          <el-tag>{{ monthly.length }} 条</el-tag>
+        </div>
+      </template>
+      <el-table :data="monthly" stripe>
+        <el-table-column prop="accounting_month" label="月份" width="130" />
+        <el-table-column label="客户" min-width="180">
+          <template #default="{ row }">{{ customerName(row.customer_id) }}</template>
+        </el-table-column>
+        <el-table-column prop="cylinder_no" label="版号" min-width="150" />
+        <el-table-column prop="receivable_amount" label="应收" width="120">
+          <template #default="{ row }">{{ formatCurrency(row.receivable_amount) }}</template>
+        </el-table-column>
+        <el-table-column prop="received_amount" label="已收" width="120">
+          <template #default="{ row }">{{ formatCurrency(row.received_amount) }}</template>
+        </el-table-column>
+        <el-table-column prop="due_amount" label="待结" width="120">
+          <template #default="{ row }">{{ formatCurrency(row.due_amount) }}</template>
+        </el-table-column>
+        <el-table-column prop="status" label="状态" width="100" />
+      </el-table>
+    </el-card>
+
+    <el-dialog v-model="receiptVisible" title="登记日收入" width="860px">
+      <el-form :model="receiptForm" label-position="top">
+        <div class="form-grid">
+          <el-form-item label="客户">
+            <el-select v-model="receiptForm.customer_id" filterable placeholder="选择客户">
+              <el-option v-for="customer in customers" :key="customer.id" :label="customer.name" :value="customer.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="收款日期">
+            <el-date-picker v-model="receiptForm.received_date" value-format="YYYY-MM-DD" type="date" />
+          </el-form-item>
+          <el-form-item label="方式">
+            <el-select v-model="receiptForm.payment_method">
+              <el-option label="现金" value="cash" />
+              <el-option label="银行" value="bank" />
+              <el-option label="支票" value="check" />
+              <el-option label="其他" value="other" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="收款人">
+            <el-input v-model="receiptForm.payee_name" />
+          </el-form-item>
+          <el-form-item label="现金">
+            <el-input-number v-model="receiptForm.cash_amount" :min="0" :precision="2" />
+          </el-form-item>
+          <el-form-item label="银行">
+            <el-input-number v-model="receiptForm.bank_amount" :min="0" :precision="2" />
+          </el-form-item>
+          <el-form-item label="其他">
+            <el-input-number v-model="receiptForm.other_amount" :min="0" :precision="2" />
+          </el-form-item>
+          <el-form-item label="业务员">
+            <el-input v-model="receiptForm.salesman_name" />
+          </el-form-item>
+        </div>
+        <el-form-item label="摘要">
+          <el-input v-model="receiptForm.abstract" placeholder="例如 May 2026 / April 2026" />
+        </el-form-item>
+        <div class="table-tools">
+          <span>分摊到版号，分摊合计必须等于收款总额 {{ formatCurrency(receiptFormTotal) }}</span>
+          <el-button :icon="Plus" @click="addAllocation">添加版号</el-button>
+        </div>
+        <el-table :data="receiptForm.allocations">
+          <el-table-column label="版号" min-width="180">
+            <template #default="{ row }"><el-input v-model="row.cylinder_no" /></template>
+          </el-table-column>
+          <el-table-column label="月份" width="170">
+            <template #default="{ row }"><el-date-picker v-model="row.accounting_month" value-format="YYYY-MM-DD" type="month" /></template>
+          </el-table-column>
+          <el-table-column label="金额" width="160">
+            <template #default="{ row }"><el-input-number v-model="row.amount" :min="0" :precision="2" /></template>
+          </el-table-column>
+          <el-table-column label="备注" min-width="160">
+            <template #default="{ row }"><el-input v-model="row.remark" /></template>
+          </el-table-column>
+          <el-table-column label="操作" width="90">
+            <template #default="{ $index }"><el-button text type="danger" @click="removeAllocation($index)">删除</el-button></template>
+          </el-table-column>
+        </el-table>
+      </el-form>
+      <template #footer>
+        <el-button @click="receiptVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingReceipt" @click="saveReceipt">保存</el-button>
+      </template>
+    </el-dialog>
+  </section>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
+import { Calendar, Download, Plus, Refresh } from '@element-plus/icons-vue'
+import { apiClient } from '../api/client'
+import type { Customer, CustomerStatementRun, MonthlyPaymentSummary, PageResponse, ReceiptDailyEntry } from '../api/types'
+import { formatCurrency } from '../utils/format'
+
+const customers = ref<Customer[]>([])
+const receipts = ref<ReceiptDailyEntry[]>([])
+const monthly = ref<MonthlyPaymentSummary[]>([])
+const customerFilter = ref('')
+const cylinderFilter = ref('')
+const receiptVisible = ref(false)
+const savingReceipt = ref(false)
+const creatingStatement = ref(false)
+const lastStatement = ref<CustomerStatementRun | null>(null)
+const monthCloseDate = ref(`${new Date().toISOString().slice(0, 7)}-01`)
+
+const receiptForm = reactive({
+  customer_id: '',
+  received_date: new Date().toISOString().slice(0, 10),
+  payment_method: 'cash',
+  cash_amount: 0,
+  bank_amount: 0,
+  other_amount: 0,
+  salesman_name: '',
+  payee_name: '',
+  abstract: '',
+  allocations: [{ cylinder_no: '', accounting_month: `${new Date().toISOString().slice(0, 7)}-01`, amount: 0, remark: '' }]
+})
+
+const statementForm = reactive({
+  customer_id: '',
+  cylinder_nos: ''
+})
+
+const receiptTotal = computed(() => receipts.value.reduce((sum, item) => sum + Number(item.total_amount || 0), 0))
+const cashTotal = computed(() => receipts.value.reduce((sum, item) => sum + Number(item.cash_amount || 0), 0))
+const bankTotal = computed(() => receipts.value.reduce((sum, item) => sum + Number(item.bank_amount || 0), 0))
+const otherTotal = computed(() => receipts.value.reduce((sum, item) => sum + Number(item.other_amount || 0), 0))
+const receiptFormTotal = computed(() => Number(receiptForm.cash_amount || 0) + Number(receiptForm.bank_amount || 0) + Number(receiptForm.other_amount || 0))
+
+function errorMessage(error: unknown) {
+  return (error as { response?: { data?: { detail?: string } } }).response?.data?.detail || '操作失败'
+}
+
+function customerName(customerId: string) {
+  return customers.value.find((customer) => customer.id === customerId)?.name || customerId
+}
+
+async function loadCustomers() {
+  const { data } = await apiClient.get<PageResponse<Customer>>('/customers', { params: { page_size: 100 } })
+  customers.value = data.items
+}
+
+async function loadReceipts() {
+  const { data } = await apiClient.get<PageResponse<ReceiptDailyEntry>>('/finance/receipts/daily', {
+    params: {
+      customer_id: customerFilter.value || undefined,
+      cylinder_no: cylinderFilter.value || undefined,
+      page_size: 50
+    }
+  })
+  receipts.value = data.items
+}
+
+async function loadMonthly() {
+  const { data } = await apiClient.get<PageResponse<MonthlyPaymentSummary>>('/finance/monthly-receipts', {
+    params: {
+      customer_id: customerFilter.value || undefined,
+      cylinder_no: cylinderFilter.value || undefined,
+      page_size: 50
+    }
+  })
+  monthly.value = data.items
+}
+
+async function loadAll() {
+  await Promise.all([loadReceipts(), loadMonthly()])
+}
+
+function addAllocation() {
+  receiptForm.allocations.push({ cylinder_no: '', accounting_month: monthCloseDate.value, amount: 0, remark: '' })
+}
+
+function removeAllocation(index: number) {
+  receiptForm.allocations.splice(index, 1)
+}
+
+function resetReceiptForm() {
+  Object.assign(receiptForm, {
+    customer_id: '',
+    received_date: new Date().toISOString().slice(0, 10),
+    payment_method: 'cash',
+    cash_amount: 0,
+    bank_amount: 0,
+    other_amount: 0,
+    salesman_name: '',
+    payee_name: '',
+    abstract: '',
+    allocations: [{ cylinder_no: '', accounting_month: monthCloseDate.value, amount: 0, remark: '' }]
+  })
+}
+
+async function saveReceipt() {
+  if (!receiptForm.customer_id || receiptFormTotal.value <= 0) {
+    ElMessage.warning('请选择客户并填写收款金额')
+    return
+  }
+  const allocations = receiptForm.allocations.filter((item) => item.cylinder_no && item.amount > 0)
+  if (!allocations.length) {
+    ElMessage.warning('请至少分摊到一个版号')
+    return
+  }
+  savingReceipt.value = true
+  try {
+    await apiClient.post('/finance/receipts/daily', { ...receiptForm, allocations })
+    ElMessage.success('日收入已登记')
+    receiptVisible.value = false
+    resetReceiptForm()
+    await loadAll()
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    savingReceipt.value = false
+  }
+}
+
+async function checkReceipt(row: ReceiptDailyEntry) {
+  try {
+    await apiClient.post(`/finance/receipts/daily/${row.id}/check`)
+    ElMessage.success('收据已审核')
+    await loadAll()
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  }
+}
+
+async function closeMonth() {
+  try {
+    const { data } = await apiClient.post<MonthlyPaymentSummary[]>('/finance/monthly-receipts/close', {
+      accounting_month: monthCloseDate.value,
+      customer_id: customerFilter.value || null
+    })
+    ElMessage.success(`已汇总 ${data.length} 条版号月结`)
+    await loadMonthly()
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  }
+}
+
+async function createStatement() {
+  if (!statementForm.customer_id || !statementForm.cylinder_nos.trim()) {
+    ElMessage.warning('请选择客户并填写版号')
+    return
+  }
+  creatingStatement.value = true
+  try {
+    const { data } = await apiClient.post<CustomerStatementRun>('/finance/customer-statements', {
+      customer_id: statementForm.customer_id,
+      statement_month: monthCloseDate.value,
+      selected_cylinder_nos: statementForm.cylinder_nos.split(',').map((item) => item.trim()).filter(Boolean),
+      include_previous_balance: true
+    })
+    lastStatement.value = data
+    ElMessage.success('客户账单已生成')
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    creatingStatement.value = false
+  }
+}
+
+async function openPrintable(path: string) {
+  try {
+    const response = await apiClient.get(path, { responseType: 'text' })
+    const url = URL.createObjectURL(new Blob([response.data], { type: 'text/html' }))
+    window.open(url, '_blank')
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  }
+}
+
+async function downloadReport(path: string, filename: string, params: Record<string, string | undefined> = {}) {
+  try {
+    const response = await apiClient.get(path, { params, responseType: 'blob' })
+    const url = URL.createObjectURL(new Blob([response.data]))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  }
+}
+
+function exportDailyReceipts() {
+  downloadReport('/finance/receipts/daily/export', 'daily_receipts.xlsx', {
+    customer_id: customerFilter.value || undefined,
+    cylinder_no: cylinderFilter.value || undefined
+  })
+}
+
+function exportMonthlyReceipts() {
+  downloadReport('/finance/monthly-receipts/export', 'monthly_receipts.xlsx', {
+    customer_id: customerFilter.value || undefined,
+    cylinder_no: cylinderFilter.value || undefined,
+    accounting_month: monthCloseDate.value
+  })
+}
+
+function exportCustomerStatements() {
+  downloadReport('/finance/customer-statements/export', 'customer_statements.xlsx', {
+    customer_id: statementForm.customer_id || customerFilter.value || undefined,
+    statement_month: monthCloseDate.value
+  })
+}
+
+function printReceipt(id: string) {
+  openPrintable(`/finance/receipts/daily/${id}/print`)
+}
+
+function printStatement(id: string) {
+  openPrintable(`/finance/customer-statements/${id}/print`)
+}
+
+watch([customerFilter, cylinderFilter], loadAll)
+onMounted(async () => {
+  await loadCustomers()
+  await loadAll()
+})
+</script>
+
+<style scoped>
+.receipt-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.receipt-summary div {
+  display: grid;
+  gap: 6px;
+  min-height: 72px;
+  padding: 12px;
+  border: 1px solid #e5edf5;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.receipt-summary span {
+  color: #667085;
+  font-size: 13px;
+}
+
+.receipt-summary strong {
+  font-size: 20px;
+}
+
+.table-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+</style>
