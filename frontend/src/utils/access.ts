@@ -1,7 +1,8 @@
 import { session, hasPermission } from '../stores/session'
 
 export function hasAnyRole(roles: string[]) {
-  return roles.some((role) => session.user?.roles.includes(role))
+  const userRoles = session.user?.roles || []
+  return roles.some((role) => userRoles.includes(role))
 }
 
 export function canUse(permission?: string, roles?: string[]) {

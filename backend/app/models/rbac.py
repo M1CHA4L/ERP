@@ -23,6 +23,20 @@ role_permissions = Table(
     Column("permission_id", UUID(as_uuid=True), ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True),
 )
 
+user_extra_permissions = Table(
+    "user_extra_permissions",
+    Base.metadata,
+    Column("user_id", UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("permission_id", UUID(as_uuid=True), ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True),
+)
+
+user_disabled_permissions = Table(
+    "user_disabled_permissions",
+    Base.metadata,
+    Column("user_id", UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("permission_id", UUID(as_uuid=True), ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True),
+)
+
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "users"
@@ -39,10 +53,15 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     device_bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     roles: Mapped[list["Role"]] = relationship(secondary=user_roles, back_populates="users")
+    extra_permissions: Mapped[list["Permission"]] = relationship(secondary=user_extra_permissions)
+    disabled_permissions: Mapped[list["Permission"]] = relationship(secondary=user_disabled_permissions)
 
     @property
     def permission_codes(self) -> set[str]:
-        return {permission.code for role in self.roles for permission in role.permissions}
+        role_codes = {permission.code for role in self.roles for permission in role.permissions}
+        extra_codes = {permission.code for permission in self.extra_permissions}
+        disabled_codes = {permission.code for permission in self.disabled_permissions}
+        return (role_codes | extra_codes) - disabled_codes
 
 
 class Role(UUIDPrimaryKeyMixin, TimestampMixin, Base):

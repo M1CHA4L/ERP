@@ -29,65 +29,18 @@
               </template>
             </el-table-column>
             <el-table-column label="引用" min-width="180">
-              <template #default="{ row }">
-                路线 {{ row.route_step_count }} / 工单 {{ row.work_order_step_count }}
-              </template>
+              <template #default="{ row }">工单 {{ row.work_order_step_count }}</template>
             </el-table-column>
             <el-table-column prop="reason" label="清理原因" min-width="160" />
-            <el-table-column label="操作" width="210" fixed="right">
+            <el-table-column label="操作" width="150" fixed="right">
               <template #default="{ row }">
                 <el-button v-if="!row.enabled" size="small" type="primary" @click="restoreTemplate(row.id)">
                   重新启用
-                </el-button>
-                <el-button
-                  size="small"
-                  type="danger"
-                  plain
-                  :disabled="!row.can_delete"
-                  @click="deleteTemplate(row.id)"
-                >
-                  删除未引用
                 </el-button>
               </template>
             </el-table-column>
           </el-table>
           <el-empty v-if="!loading && cleanup && cleanup.templates.length === 0" description="暂无需要清理的工序模板" />
-        </el-tab-pane>
-
-        <el-tab-pane label="工艺路线" name="routes">
-          <el-table :data="cleanup?.routes || []" stripe>
-            <el-table-column prop="route_code" label="编码" width="120" />
-            <el-table-column prop="name" label="路线名称" min-width="150" />
-            <el-table-column prop="version" label="版本" width="90" />
-            <el-table-column label="状态" width="110">
-              <template #default="{ row }">
-                <el-tag :type="routeStatusType(row.status)">{{ routeStatusLabel(row.status) }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="引用" min-width="210">
-              <template #default="{ row }">
-                产品 {{ row.product_count }} / 订单 {{ row.sales_order_count }} / 工单 {{ row.work_order_count }}
-              </template>
-            </el-table-column>
-            <el-table-column prop="reason" label="清理原因" min-width="160" />
-            <el-table-column label="操作" width="200" fixed="right">
-              <template #default="{ row }">
-                <el-button v-if="row.can_restore" size="small" type="primary" @click="restoreRoute(row.id)">
-                  恢复草稿
-                </el-button>
-                <el-button
-                  v-if="row.status !== 'disabled'"
-                  size="small"
-                  type="danger"
-                  plain
-                  @click="disableRoute(row.id)"
-                >
-                  禁用
-                </el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-          <el-empty v-if="!loading && cleanup && cleanup.routes.length === 0" description="暂无需要清理的工艺路线" />
         </el-tab-pane>
 
         <el-tab-pane label="产品档案" name="products">
@@ -104,9 +57,7 @@
               </template>
             </el-table-column>
             <el-table-column label="引用" min-width="180">
-              <template #default="{ row }">
-                订单 {{ row.sales_order_item_count }} / 工单 {{ row.work_order_count }}
-              </template>
+              <template #default="{ row }">订单 {{ row.sales_order_item_count }} / 工单 {{ row.work_order_count }}</template>
             </el-table-column>
             <el-table-column prop="reason" label="清理原因" min-width="160" />
             <el-table-column label="操作" width="130" fixed="right">
@@ -126,7 +77,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { apiClient } from '../api/client'
 import type { MasterDataCleanup } from '../api/types'
@@ -138,9 +89,8 @@ const activeTab = ref('templates')
 const summaryCards = computed(() => {
   const summary = cleanup.value?.summary
   return [
-    { label: '停用工序', value: summary?.inactive_templates || 0, hint: '可重新启用或删除未引用项' },
-    { label: '未用工序', value: summary?.unused_templates || 0, hint: '尚未进入路线/工单' },
-    { label: '异常路线', value: summary?.inactive_routes || 0, hint: '草稿或已禁用路线' },
+    { label: '停用工序', value: summary?.inactive_templates || 0, hint: '可重新启用' },
+    { label: '未用工序', value: summary?.unused_templates || 0, hint: '尚未进入工单' },
     { label: '未用产品', value: summary?.unused_products || 0, hint: '尚未被订单引用' },
     { label: '停用产品', value: summary?.inactive_products || 0, hint: '可从这里恢复误删档案' }
   ]
@@ -162,44 +112,10 @@ async function restoreTemplate(id: string) {
   await loadCleanup()
 }
 
-async function restoreRoute(id: string) {
-  await apiClient.post(`/maintenance/master-data-cleanup/routes/${id}/restore`)
-  ElMessage.success('工艺路线已恢复为草稿')
-  await loadCleanup()
-}
-
 async function restoreProduct(id: string) {
   await apiClient.post(`/maintenance/master-data-cleanup/products/${id}/restore`)
   ElMessage.success('产品档案已恢复')
   await loadCleanup()
-}
-
-async function deleteTemplate(id: string) {
-  await ElMessageBox.confirm('确定删除这个未引用的工序模板吗？删除后不能被路线选择。', '删除确认', {
-    type: 'warning'
-  })
-  await apiClient.delete(`/process-routes/templates/${id}`)
-  ElMessage.success('工序模板已删除')
-  await loadCleanup()
-}
-
-async function disableRoute(id: string) {
-  await ElMessageBox.confirm('确定禁用这条工艺路线吗？已被引用的历史订单和工单不会被删除。', '禁用确认', {
-    type: 'warning'
-  })
-  await apiClient.delete(`/process-routes/${id}`)
-  ElMessage.success('工艺路线已禁用')
-  await loadCleanup()
-}
-
-function routeStatusLabel(status: string) {
-  return status === 'active' ? '启用' : status === 'draft' ? '草稿' : status === 'disabled' ? '禁用' : status
-}
-
-function routeStatusType(status: string) {
-  if (status === 'active') return 'success'
-  if (status === 'draft') return 'warning'
-  return 'info'
 }
 
 function productStatusLabel(status: string) {
@@ -211,7 +127,7 @@ onMounted(loadCleanup)
 
 <style scoped>
 .cleanup-metrics {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 @media (max-width: 960px) {

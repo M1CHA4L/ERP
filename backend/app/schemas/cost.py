@@ -54,6 +54,9 @@ class ProfitReportResponse(BaseModel):
 
 class SalespersonMonthlyRow(BaseModel):
     salesperson: str
+    customer_id: UUID
+    customer_name: str
+    settlement_type: str
     new_pcs: float
     old_pcs: float
     total_amount: float
@@ -63,11 +66,12 @@ class CustomerMonthlySalesRow(BaseModel):
     salesperson: str
     customer_id: UUID
     customer_name: str
+    settlement_type: str
+    pcs: float
     new_pcs: float
     old_pcs: float
     total_amount: float
     price: float
-    settlement_type: str
 
 
 class SalesMonthlySummary(BaseModel):

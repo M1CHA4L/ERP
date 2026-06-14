@@ -54,7 +54,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <el-button size="small" :disabled="row.status !== 'draft'" v-permission="'delivery:create'" @click="ship(row)">
               发货
@@ -68,6 +68,16 @@
             >
               签收
             </el-button>
+            <el-dropdown trigger="click" @command="handlePrintCommand(row, $event)">
+              <el-button size="small" :icon="Printer">打印</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item v-if="canPrintAmount" command="priced">Priced</el-dropdown-item>
+                  <el-dropdown-item v-if="canPrintAmount" command="no_unit_price">No Unit Price</el-dropdown-item>
+                  <el-dropdown-item command="no_amount">No Amount</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </template>
         </el-table-column>
       </el-table>
@@ -109,12 +119,15 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Printer, Refresh } from '@element-plus/icons-vue'
 import { apiClient } from '../api/client'
 import type { DeliverableOrder, DeliveryOrder, PageResponse } from '../api/types'
+import { hasPermission, session } from '../stores/session'
 import { formatCurrency } from '../utils/format'
+
+type DeliveryPrintVariant = 'priced' | 'no_unit_price' | 'no_amount'
 
 const deliverableOrders = ref<DeliverableOrder[]>([])
 const deliveryOrders = ref<DeliveryOrder[]>([])
@@ -135,6 +148,11 @@ const createForm = reactive({
 
 const signForm = reactive({
   signed_by: ''
+})
+
+const canPrintAmount = computed(() => {
+  const roles = session.user?.roles || []
+  return roles.some((role) => ['admin', 'boss', 'finance'].includes(role)) || hasPermission('cost:view')
 })
 
 function errorMessage(error: unknown) {
@@ -229,6 +247,32 @@ async function sign() {
     ElMessage.error(errorMessage(error))
   } finally {
     signing.value = false
+  }
+}
+
+async function printDelivery(delivery: DeliveryOrder, variant: DeliveryPrintVariant) {
+  const popup = window.open('', '_blank')
+  try {
+    const { data } = await apiClient.get<string>(`/delivery-orders/${delivery.id}/print`, {
+      params: { variant },
+      responseType: 'text'
+    })
+    const url = URL.createObjectURL(new Blob([data], { type: 'text/html;charset=utf-8' }))
+    if (popup) {
+      popup.location.href = url
+    } else {
+      window.open(url, '_blank')
+    }
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch (error) {
+    popup?.close()
+    ElMessage.error(errorMessage(error))
+  }
+}
+
+function handlePrintCommand(delivery: DeliveryOrder, variant: string | number | object) {
+  if (variant === 'priced' || variant === 'no_unit_price' || variant === 'no_amount') {
+    printDelivery(delivery, variant)
   }
 }
 

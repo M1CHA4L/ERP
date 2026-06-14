@@ -3,6 +3,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_permission
@@ -47,6 +48,7 @@ def list_inventory_lots(
     customer_id: UUID | None = None,
     owner_type: str | None = None,
     product_name: str | None = None,
+    keyword: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -59,6 +61,17 @@ def list_inventory_lots(
         query = query.filter(InventoryLot.owner_type == owner_type)
     if product_name:
         query = query.filter(InventoryLot.product_name.ilike(f"%{product_name}%"))
+    if keyword:
+        term = f"%{keyword.strip()}%"
+        query = query.outerjoin(Customer, InventoryLot.customer_id == Customer.id).filter(
+            or_(
+                InventoryLot.lot_no.ilike(term),
+                InventoryLot.product_name.ilike(term),
+                InventoryLot.specification.ilike(term),
+                Customer.name.ilike(term),
+                Customer.customer_code.ilike(term),
+            )
+        )
     total = query.count()
     items = query.order_by(InventoryLot.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
     return PageResponse(items=items, total=total, page=page, page_size=page_size)
@@ -230,6 +243,7 @@ def list_inventory_transactions(
     movement_type: str | None = None,
     customer_id: UUID | None = None,
     product_name: str | None = None,
+    keyword: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -242,6 +256,18 @@ def list_inventory_transactions(
         query = query.filter(InventoryTransaction.customer_id == customer_id)
     if product_name:
         query = query.filter(InventoryTransaction.product_name.ilike(f"%{product_name}%"))
+    if keyword:
+        term = f"%{keyword.strip()}%"
+        query = query.outerjoin(Customer, InventoryTransaction.customer_id == Customer.id).filter(
+            or_(
+                InventoryTransaction.movement_no.ilike(term),
+                InventoryTransaction.product_name.ilike(term),
+                InventoryTransaction.specification.ilike(term),
+                InventoryTransaction.cylinder_no.ilike(term),
+                Customer.name.ilike(term),
+                Customer.customer_code.ilike(term),
+            )
+        )
     total = query.count()
     items = query.order_by(InventoryTransaction.movement_date.desc(), InventoryTransaction.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
     return PageResponse(items=items, total=total, page=page, page_size=page_size)
@@ -309,6 +335,7 @@ def create_cylinder_stock_in(
 def list_cylinder_stocks(
     cylinder_no: str | None = None,
     customer_id: UUID | None = None,
+    keyword: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -319,6 +346,16 @@ def list_cylinder_stocks(
         query = query.filter(CylinderStock.cylinder_no.ilike(f"%{cylinder_no}%"))
     if customer_id:
         query = query.filter(CylinderStock.customer_id == customer_id)
+    if keyword:
+        term = f"%{keyword.strip()}%"
+        query = query.outerjoin(Customer, CylinderStock.customer_id == Customer.id).filter(
+            or_(
+                CylinderStock.stock_no.ilike(term),
+                CylinderStock.cylinder_no.ilike(term),
+                Customer.name.ilike(term),
+                Customer.customer_code.ilike(term),
+            )
+        )
     total = query.count()
     items = query.order_by(CylinderStock.stock_in_date.desc(), CylinderStock.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
     return PageResponse(items=items, total=total, page=page, page_size=page_size)

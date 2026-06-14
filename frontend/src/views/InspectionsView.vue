@@ -56,6 +56,11 @@
             </el-button>
           </template>
         </el-table-column>
+        <el-table-column label="操作" width="96" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" :icon="Printer" @click="printInspection(row)">打印</el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </el-card>
 
@@ -124,7 +129,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, type UploadUserFile } from 'element-plus'
-import { Refresh, UploadFilled } from '@element-plus/icons-vue'
+import { Printer, Refresh, UploadFilled } from '@element-plus/icons-vue'
 import { apiClient } from '../api/client'
 import FilePanel from '../components/FilePanel.vue'
 import type { FileAsset, InspectionRecord, PageResponse, PendingInspectionTask, WorkOrder } from '../api/types'
@@ -225,6 +230,23 @@ async function uploadQueuedFiles(ownerType: string, ownerId: string, fileType: s
     formData.append('file_type', fileType)
     formData.append('file', item.raw)
     await apiClient.post('/files/upload', formData)
+  }
+}
+
+async function printInspection(record: InspectionRecord) {
+  const popup = window.open('', '_blank')
+  try {
+    const { data } = await apiClient.get<string>(`/inspections/${record.id}/print`, { responseType: 'text' })
+    const url = URL.createObjectURL(new Blob([data], { type: 'text/html;charset=utf-8' }))
+    if (popup) {
+      popup.location.href = url
+    } else {
+      window.open(url, '_blank')
+    }
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch (error) {
+    popup?.close()
+    ElMessage.error(errorMessage(error))
   }
 }
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date as Date
+from datetime import date as Date, datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,6 +29,8 @@ class PlateDetails(BaseModel):
     unit_w: PlateValue = None
     crossway: PlateValue = None
     order_date: PlateValue = None
+    order_datetime: PlateValue = None
+    order_time: PlateValue = None
     dynamic_balance: PlateValue = None
     slope: PlateValue = None
     original_no: PlateValue = None
@@ -43,6 +46,9 @@ class PlateDetails(BaseModel):
     no: PlateValue = None
     sample_no: PlateValue = None
     printings: PlateValue = None
+    printing_material: PlateValue = None
+    new_qty: PlateValue = None
+    self_bring_qty: PlateValue = None
     salesman: PlateValue = None
     sign_in_person: PlateValue = None
     c_value: PlateValue = None
@@ -55,6 +61,9 @@ class PlateDetails(BaseModel):
     bag_type: PlateValue = None
     material_new: PlateValue = None
     set_type: PlateValue = None
+    dia: PlateValue = None
+    width: PlateValue = None
+    hor_ver: PlateValue = None
     mark_line: PlateValue = None
     test_line: PlateValue = None
     test_spot: PlateValue = None
@@ -80,6 +89,10 @@ class PlateDetails(BaseModel):
     rework_target_step: PlateValue = None
     rework_quantity: PlateValue = None
     rework_chargeable: PlateValue = None
+    reserved_plate_number_id: PlateValue = None
+    plate_number_kind: PlateValue = None
+    derivation_type: PlateValue = None
+    derived_source_cylinder_no: PlateValue = None
 
 
 class ColorRow(BaseModel):
@@ -106,6 +119,12 @@ class SalesOrderItemCreate(BaseModel):
     remark: str | None = None
 
 
+class SalesOrderCustomerMaterialUseCreate(BaseModel):
+    lot_id: UUID
+    quantity: float = Field(gt=0)
+    remark: str | None = None
+
+
 class SalesOrderCreate(BaseModel):
     customer_id: UUID
     due_date: Date
@@ -115,6 +134,7 @@ class SalesOrderCreate(BaseModel):
     plate_details: PlateDetails | None = None
     color_rows: list[ColorRow] | None = Field(default_factory=list)
     items: list[SalesOrderItemCreate]
+    customer_material_uses: list[SalesOrderCustomerMaterialUseCreate] = Field(default_factory=list)
 
 
 class SalesOrderItemRead(BaseModel):
@@ -155,6 +175,21 @@ class SalesOrderRead(BaseModel):
     items: list[SalesOrderItemRead] = []
 
 
+class SalesOrderMaterialUseRead(BaseModel):
+    movement_no: str
+    lot_id: UUID | None = None
+    lot_no: str | None = None
+    product_name: str
+    specification: str | None = None
+    quantity_used: float
+    unit: str
+    warehouse_name: str
+    movement_date: Date
+    cylinder_no: str | None = None
+    remark: str | None = None
+    status: str
+
+
 class EntrustSheetRead(BaseModel):
     order: SalesOrderRead
     customer_name: str | None = None
@@ -162,6 +197,57 @@ class EntrustSheetRead(BaseModel):
     customer_contact: str | None = None
     customer_phone: str | None = None
     entrust_no: str
+
+
+class PlateNumberReserveRequest(BaseModel):
+    plate_number_kind: str = Field(default="normal", pattern="^(normal|ppl|special)$")
+    count: int = Field(default=1, ge=1, le=50)
+
+
+class PlateNumberReservationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    plate_no: str
+    prefix: str
+    year_month: str
+    sequence_no: int
+    status: str
+    assigned_user_id: UUID | None = None
+    used_order_id: UUID | None = None
+    used_at: datetime | None = None
+    returned_at: datetime | None = None
+    note: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PlateNumberDerivedPreview(BaseModel):
+    source_plate_no: str
+    derivation_type: str
+    plate_no: str
+
+
+class EntrustRequirementsUpdate(BaseModel):
+    common_remarks: str | None = None
+    returns: str | None = None
+    archives: str | None = None
+    inspection_requirement: str | None = None
+    mark_line: str | None = None
+    test_line: str | None = None
+    test_spot: str | None = None
+    computer_position: str | None = None
+    production_position: str | None = None
+    engraving_requirement: str | None = None
+    proofing_requirement: str | None = None
+    computer_requirement: str | None = None
+    color_separation: str | None = None
+    engraving_note: str | None = None
+
+
+class EntrustContentUpdate(BaseModel):
+    plate_details: PlateDetails | None = None
+    color_rows: list[ColorRow] | None = None
 
 
 class EntrustLayoutUpdate(BaseModel):
@@ -181,6 +267,61 @@ class EntrustLayoutUpdate(BaseModel):
     bottom_note: str | None = None
     width_label: str | None = None
     custom_note: str | None = None
+    left_mark: str | None = None
+    empty_move: str | None = None
+    left_detection: str | None = None
+    empty_color_move: str | None = None
+    layout_color: str | None = None
+    left_color: str | None = None
+    right_color: str | None = None
+    left_broaden: str | None = None
+    middle_broaden: float | None = None
+    right_move: str | None = None
+    right_mark: str | None = None
+    right_empty_move: str | None = None
+    right_detection: str | None = None
+    right_broaden: str | None = None
+    printing_width: str | float | None = None
+    printing_margin: str | float | None = None
+    continuity: bool | None = None
+    light_spot_horizontal: float | None = None
+    light_spot_vertical: float | None = None
+    light_spot_width: float | None = None
+    light_spot_upper_left: bool | None = None
+    light_spot_upper_right: bool | None = None
+    light_spot_lower_left: bool | None = None
+    light_spot_lower_right: bool | None = None
+    left_mark_enabled: bool | None = None
+    right_mark_enabled: bool | None = None
+    left_detection_enabled: bool | None = None
+    right_detection_enabled: bool | None = None
+    exclusive_use: bool | None = None
+    mid_mark: bool | None = None
+    left_self_mark: bool | None = None
+    right_self_mark: bool | None = None
+    full_line: bool | None = None
+    full_line_width: str | float | None = None
+    layout_items: list[dict[str, str | int | float | bool]] | None = None
+
+
+class EntrustLayoutTemplateCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    template_type: str = Field(default="template", pattern="^(template|archive)$")
+    order_no: str | None = Field(default=None, max_length=64)
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class EntrustLayoutTemplateRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    template_type: str
+    order_no: str | None = None
+    settings: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+    created_by: UUID | None = None
 
 
 class ConfirmOrderRequest(BaseModel):

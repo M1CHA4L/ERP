@@ -24,6 +24,9 @@
         <el-button :icon="Download" v-permission="'report:export'" @click="exportCustomers">
           导出客户月销售额
         </el-button>
+        <el-button type="primary" :icon="Download" v-permission="'report:export'" @click="exportTotalSales">
+          导出 Total Sales
+        </el-button>
       </div>
     </div>
 
@@ -49,9 +52,11 @@
       <el-tabs v-model="activeTab">
         <el-tab-pane label="销售月成绩" name="salesperson">
           <el-table :data="salespersonReport.rows" stripe show-summary :summary-method="salespersonSummary">
-            <el-table-column prop="salesperson" label="业务员" min-width="180" />
-            <el-table-column prop="new_pcs" label="新支数" width="150" />
-            <el-table-column prop="old_pcs" label="旧支数" width="150" />
+            <el-table-column prop="salesperson" label="业务员" width="150" />
+            <el-table-column prop="settlement_type" label="结算方式" width="130" />
+            <el-table-column prop="customer_name" label="客户名称" min-width="220" />
+            <el-table-column prop="new_pcs" label="新支数" width="120" />
+            <el-table-column prop="old_pcs" label="旧支数" width="120" />
             <el-table-column prop="total_amount" label="销售额" min-width="180">
               <template #default="{ row }">{{ formatCurrency(row.total_amount) }}</template>
             </el-table-column>
@@ -60,7 +65,9 @@
         <el-tab-pane label="客户月销售额" name="customer">
           <el-table :data="customerReport.rows" stripe show-summary :summary-method="customerSummary">
             <el-table-column prop="salesperson" label="业务员" width="150" />
+            <el-table-column prop="settlement_type" label="结算方式" width="130" />
             <el-table-column prop="customer_name" label="客户名称" min-width="220" />
+            <el-table-column prop="pcs" label="总支数" width="110" />
             <el-table-column prop="new_pcs" label="新支数" width="120" />
             <el-table-column prop="old_pcs" label="旧支数" width="120" />
             <el-table-column prop="total_amount" label="销售额" min-width="160">
@@ -69,7 +76,6 @@
             <el-table-column prop="price" label="平均单价" width="110">
               <template #default="{ row }">{{ Number(row.price || 0).toFixed(2) }}</template>
             </el-table-column>
-            <el-table-column prop="settlement_type" label="结算方式" min-width="150" />
           </el-table>
         </el-tab-pane>
       </el-tabs>
@@ -197,25 +203,31 @@ function exportCustomers() {
   downloadReport('/reports/customer-monthly-sales/export', `customer-monthly-sales-${filters.date_from}-${filters.date_to}.xlsx`)
 }
 
+function exportTotalSales() {
+  downloadReport('/reports/monthly-total-sales/export', `total-sales-${filters.date_from}-${filters.date_to}.xlsx`)
+}
+
 function salespersonSummary() {
-  return ['合计', summary.value.new_pcs, summary.value.old_pcs, formatCurrency(summary.value.total_amount)]
+  return ['', '', '合计', summary.value.new_pcs, summary.value.old_pcs, formatCurrency(summary.value.total_amount)]
 }
 
 function customerSummary({ columns, data }: { columns: unknown[]; data: CustomerMonthlySalesRow[] }) {
   const total = data.reduce(
     (acc, row) => {
+      acc.pcs += Number(row.pcs || 0)
       acc.new_pcs += Number(row.new_pcs || 0)
       acc.old_pcs += Number(row.old_pcs || 0)
       acc.total_amount += Number(row.total_amount || 0)
       return acc
     },
-    { new_pcs: 0, old_pcs: 0, total_amount: 0 }
+    { pcs: 0, new_pcs: 0, old_pcs: 0, total_amount: 0 }
   )
   return columns.map((_, index) => {
     if (index === 0) return '合计'
-    if (index === 2) return total.new_pcs
-    if (index === 3) return total.old_pcs
-    if (index === 4) return formatCurrency(total.total_amount)
+    if (index === 3) return total.pcs
+    if (index === 4) return total.new_pcs
+    if (index === 5) return total.old_pcs
+    if (index === 6) return formatCurrency(total.total_amount)
     return ''
   })
 }

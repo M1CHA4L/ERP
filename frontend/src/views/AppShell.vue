@@ -2,20 +2,21 @@
   <el-container class="app-shell">
     <el-aside width="248px" class="app-aside">
       <div class="brand">
-        <div class="brand-mark">BSP</div>
-        <div>
-          <strong>孟加拉上海制版</strong>
-          <span>Bangladesh Shanghai Plate</span>
-        </div>
+        <div class="brand-mark">BSPM</div>
       </div>
 
       <el-menu :default-active="activeMenuPath" router class="side-menu">
-        <el-menu-item v-for="item in visibleNav" :key="item.path" :index="item.path">
-          <el-icon>
-            <component :is="item.icon" />
-          </el-icon>
-          <span>{{ navLabel(item) }}</span>
-        </el-menu-item>
+        <el-sub-menu v-for="group in groupedNav" :key="group.key" :index="group.key">
+          <template #title>
+            <span>{{ group.label }}</span>
+          </template>
+          <el-menu-item v-for="item in group.items" :key="item.path" :index="item.path">
+            <el-icon>
+              <component :is="item.icon" />
+            </el-icon>
+            <span>{{ navLabel(item) }}</span>
+          </el-menu-item>
+        </el-sub-menu>
       </el-menu>
     </el-aside>
 
@@ -68,7 +69,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Key, SwitchButton } from '@element-plus/icons-vue'
 import { apiClient } from '../api/client'
-import { visibleNavItems, type NavItem } from '../data/navigation'
+import { visibleNavGroups, visibleNavItems, type NavItem } from '../data/navigation'
 import { languageButtonLabel, t, toggleLocale } from '../stores/language'
 import { clearSession, session } from '../stores/session'
 
@@ -95,6 +96,7 @@ const roleLabelMap: Record<string, string> = {
 }
 
 const visibleNav = computed(() => visibleNavItems(session.user))
+const groupedNav = computed(() => visibleNavGroups(session.user))
 const activeMenuPath = computed(() => visibleNav.value.find((item) => route.path.startsWith(item.path))?.path || route.path)
 const currentTitle = computed(() => {
   const item = visibleNav.value.find((navItem) => route.path.startsWith(navItem.path))

@@ -28,6 +28,7 @@ def _build_user_profile(user: User, permissions: list[str]) -> UserProfile:
         id=user.id,
         username=user.username,
         real_name=user.real_name,
+        department=user.department,
         roles=[role.code for role in user.roles],
         permissions=permissions,
         device_mac_address=user.device_mac_address,

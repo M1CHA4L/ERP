@@ -8,6 +8,7 @@
           <el-option label="生产中" value="in_production" />
           <el-option label="返工中" value="reworking" />
         </el-select>
+        <el-input v-model="keyword" placeholder="客户 / 订单 / 工单 / 产品" clearable :prefix-icon="Search" />
         <el-button type="primary" :icon="Refresh" @click="loadWorkOrders">刷新</el-button>
         <el-button type="success" :icon="Download" v-permission="'report:export'" @click="exportWorkOrders">
           导出 Excel
@@ -50,19 +51,20 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Download, Refresh } from '@element-plus/icons-vue'
+import { Download, Refresh, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { apiClient } from '../api/client'
 import type { PageResponse, WorkOrder } from '../api/types'
 import { statusLabel, stepStatusMap, workOrderStatusMap } from '../utils/status'
 
 const router = useRouter()
+const keyword = ref('')
 const statusFilter = ref('')
 const workOrders = ref<WorkOrder[]>([])
 
 async function loadWorkOrders() {
   const { data } = await apiClient.get<PageResponse<WorkOrder>>('/work-orders', {
-    params: { status_filter: statusFilter.value || undefined }
+    params: { status_filter: statusFilter.value || undefined, keyword: keyword.value || undefined }
   })
   workOrders.value = data.items
 }
@@ -74,7 +76,7 @@ function errorMessage(error: unknown) {
 async function exportWorkOrders() {
   try {
     const response = await apiClient.get('/work-orders/export', {
-      params: { status_filter: statusFilter.value || undefined },
+      params: { status_filter: statusFilter.value || undefined, keyword: keyword.value || undefined },
       responseType: 'blob'
     })
     const url = URL.createObjectURL(new Blob([response.data]))
@@ -92,6 +94,6 @@ function goDetail(row: WorkOrder) {
   router.push(`/work-orders/${row.id}`)
 }
 
-watch(statusFilter, loadWorkOrders)
+watch([keyword, statusFilter], loadWorkOrders)
 onMounted(loadWorkOrders)
 </script>

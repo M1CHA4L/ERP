@@ -13,7 +13,7 @@
         </p>
       </div>
 
-      <el-form class="login-form" :model="form" label-position="top" @submit.prevent="submit">
+      <el-form class="login-form" :model="form" label-position="top" @keyup.enter="submit" @submit.prevent="submit">
         <el-form-item :label="t('login.username')">
           <el-input v-model="form.username" size="large" autocomplete="username" />
         </el-form-item>
@@ -26,7 +26,7 @@
             show-password
           />
         </el-form-item>
-        <el-button class="login-button" type="primary" size="large" :loading="loading" @click="submit">
+        <el-button class="login-button" type="primary" size="large" native-type="submit" :loading="loading">
           {{ t('login.submit') }}
         </el-button>
       </el-form>
@@ -52,6 +52,7 @@ const form = reactive({
 })
 
 async function submit() {
+  if (loading.value) return
   loading.value = true
   try {
     const { data } = await apiClient.post<LoginResponse>('/auth/login', {

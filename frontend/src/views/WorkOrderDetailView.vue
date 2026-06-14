@@ -7,6 +7,20 @@
         <el-tag v-if="workOrder">{{ statusLabel(workOrderStatusMap, workOrder.status) }}</el-tag>
       </div>
       <el-button
+        :icon="Printer"
+        :disabled="!workOrder"
+        @click="printProcessTaskSheet"
+      >
+        Process Task Sheet
+      </el-button>
+      <el-button
+        :icon="Printer"
+        :disabled="!workOrder"
+        @click="printSelfInspectionCard"
+      >
+        Self Inspection Card
+      </el-button>
+      <el-button
         type="primary"
         :icon="UserFilled"
         v-permission="'work_order:dispatch'"
@@ -176,7 +190,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type UploadUserFile } from 'element-plus'
-import { ArrowLeft, UploadFilled, UserFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, Printer, UploadFilled, UserFilled } from '@element-plus/icons-vue'
 import { apiClient } from '../api/client'
 import FilePanel from '../components/FilePanel.vue'
 import TimelinePanel from '../components/TimelinePanel.vue'
@@ -235,13 +249,17 @@ async function loadTimeline() {
 
 async function loadUsers() {
   if (!hasPermission('work_order:dispatch')) return
-  const { data } = await apiClient.get<UserOption[]>('/users')
+  const { data } = await apiClient.get<UserOption[]>('/users/options')
   users.value = data
 }
 
 function userName(userId?: string) {
   if (!userId) return ''
   return users.value.find((user) => user.id === userId)?.real_name || userId
+}
+
+function errorMessage(error: unknown) {
+  return (error as { response?: { data?: { detail?: string } } }).response?.data?.detail || '操作失败'
 }
 
 async function loadStepFileCounts() {
@@ -271,6 +289,42 @@ async function uploadQueuedFiles(ownerType: string, ownerId: string, fileType: s
     formData.append('file_type', fileType)
     formData.append('file', item.raw)
     await apiClient.post('/files/upload', formData)
+  }
+}
+
+async function printSelfInspectionCard() {
+  if (!workOrder.value) return
+  const popup = window.open('', '_blank')
+  try {
+    const { data } = await apiClient.get<string>(`/work-orders/${workOrder.value.id}/self-inspection-card`, { responseType: 'text' })
+    const url = URL.createObjectURL(new Blob([data], { type: 'text/html;charset=utf-8' }))
+    if (popup) {
+      popup.location.href = url
+    } else {
+      window.open(url, '_blank')
+    }
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch (error) {
+    popup?.close()
+    ElMessage.error(errorMessage(error))
+  }
+}
+
+async function printProcessTaskSheet() {
+  if (!workOrder.value) return
+  const popup = window.open('', '_blank')
+  try {
+    const { data } = await apiClient.get<string>(`/work-orders/${workOrder.value.id}/process-task-sheet`, { responseType: 'text' })
+    const url = URL.createObjectURL(new Blob([data], { type: 'text/html;charset=utf-8' }))
+    if (popup) {
+      popup.location.href = url
+    } else {
+      window.open(url, '_blank')
+    }
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  } catch (error) {
+    popup?.close()
+    ElMessage.error(errorMessage(error))
   }
 }
 

@@ -58,7 +58,7 @@
         <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-button text type="primary" @click.stop="goOrder(row)">详情</el-button>
-            <el-button text type="primary" @click.stop="openPrintable(`/plate-orders/${row.id}/production-order`)">生产通知</el-button>
+            <el-button text type="primary" @click.stop="printProductionOrder(row)">生产单</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -160,19 +160,29 @@ async function loadLedger() {
   }
 }
 
+function goOrder(order: SalesOrder) {
+  router.push(`/orders/${order.id}`)
+}
+
 async function openPrintable(path: string) {
+  const popup = window.open('', '_blank')
   try {
-    const response = await apiClient.get(path, { responseType: 'text' })
-    const url = URL.createObjectURL(new Blob([response.data], { type: 'text/html' }))
-    window.open(url, '_blank')
+    const { data } = await apiClient.get<string>(path, { responseType: 'text' })
+    const url = URL.createObjectURL(new Blob([data], { type: 'text/html;charset=utf-8' }))
+    if (popup) {
+      popup.location.href = url
+    } else {
+      window.open(url, '_blank')
+    }
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
   } catch (error) {
+    popup?.close()
     ElMessage.error(errorMessage(error))
   }
 }
 
-function goOrder(order: SalesOrder) {
-  router.push(`/orders/${order.id}`)
+function printProductionOrder(order: SalesOrder) {
+  openPrintable(`/plate-orders/${order.id}/production-order`)
 }
 
 onMounted(loadOrders)

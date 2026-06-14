@@ -4,12 +4,27 @@ import type { UserProfile } from '../api/types'
 const rawUser = localStorage.getItem('erp_user')
 const DEVICE_MAC_KEY = 'erp_device_mac_address'
 
+function parseStoredUser(value: string | null): UserProfile | null {
+  if (!value) return null
+  try {
+    const user = JSON.parse(value) as UserProfile
+    return {
+      ...user,
+      roles: Array.isArray(user.roles) ? user.roles : [],
+      permissions: Array.isArray(user.permissions) ? user.permissions : []
+    }
+  } catch {
+    localStorage.removeItem('erp_user')
+    return null
+  }
+}
+
 export const session = reactive<{
   token: string
   user: UserProfile | null
 }>({
   token: localStorage.getItem('erp_token') || '',
-  user: rawUser ? JSON.parse(rawUser) : null
+  user: parseStoredUser(rawUser)
 })
 
 export function setSession(token: string, user: UserProfile) {
@@ -41,5 +56,5 @@ export function getDeviceMacAddress() {
 
 export function hasPermission(code?: string) {
   if (!code) return true
-  return Boolean(session.user?.permissions.includes(code))
+  return Boolean(session.user?.permissions?.includes(code))
 }

@@ -95,13 +95,13 @@ body {
   height: 76px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
   padding: 0 20px;
   border-bottom: 1px solid #e2e8f0;
 }
 
 .brand-mark {
-  width: 42px;
+  width: 68px;
   height: 42px;
   display: grid;
   place-items: center;
@@ -109,22 +109,7 @@ body {
   color: #ffffff;
   background: #0f766e;
   font-weight: 800;
-  font-size: 14px;
-}
-
-.brand strong,
-.brand span {
-  display: block;
-}
-
-.brand strong {
-  font-size: 15px;
-}
-
-.brand span {
-  margin-top: 4px;
-  color: #8a95a5;
-  font-size: 12px;
+  font-size: 18px;
 }
 
 .side-menu {
@@ -369,7 +354,6 @@ body {
     width: 72px !important;
   }
 
-  .brand div:last-child,
   .side-menu span {
     display: none;
   }

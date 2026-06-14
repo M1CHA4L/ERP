@@ -19,6 +19,21 @@ class UserRead(BaseModel):
     device_bound_at: datetime | None = None
     last_login_at: datetime | None = None
     roles: list[str] = []
+    role_permissions: list[str] = []
+    extra_permissions: list[str] = []
+    disabled_permissions: list[str] = []
+    permissions: list[str] = []
+
+
+class UserOptionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    username: str
+    real_name: str
+    department: str | None
+    status: str
+    roles: list[str] = []
 
 
 class RoleRead(BaseModel):
@@ -28,6 +43,17 @@ class RoleRead(BaseModel):
     code: str
     name: str
     status: str
+    permissions: list[str] = []
+
+
+class PermissionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    code: str
+    name: str
+    type: str
+    sort_no: int
 
 
 class UserCreate(BaseModel):
@@ -39,6 +65,8 @@ class UserCreate(BaseModel):
     department: str | None = None
     status: str = "active"
     roles: list[str] = []
+    extra_permissions: list[str] = []
+    disabled_permissions: list[str] = []
 
 
 class UserUpdate(BaseModel):
@@ -49,3 +77,5 @@ class UserUpdate(BaseModel):
     department: str | None = None
     status: str | None = None
     roles: list[str] | None = None
+    extra_permissions: list[str] | None = None
+    disabled_permissions: list[str] | None = None

@@ -6,13 +6,26 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.deps import get_current_user, require_permission
 from app.core.security import get_password_hash
 from app.db.session import get_db
-from app.models.rbac import Role, User
-from app.schemas.user import RoleRead, UserCreate, UserRead, UserUpdate
+from app.models.rbac import Permission, Role, User
+from app.schemas.user import PermissionRead, RoleRead, UserCreate, UserOptionRead, UserRead, UserUpdate
 
 router = APIRouter()
 
+USER_OPTION_PERMISSIONS = {
+    "system:permission",
+    "customer:view",
+    "customer:create",
+    "order:view",
+    "order:create",
+    "work_order:view",
+    "work_order:dispatch",
+    "workflow_v2:view",
+    "workflow_v2:making:assign",
+}
+
 
 def _serialize_user(user: User) -> UserRead:
+    role_permissions = {permission.code for role in user.roles for permission in role.permissions}
     return UserRead(
         id=user.id,
         username=user.username,
@@ -25,11 +38,41 @@ def _serialize_user(user: User) -> UserRead:
         device_bound_at=user.device_bound_at,
         last_login_at=user.last_login_at,
         roles=[role.code for role in user.roles],
+        role_permissions=sorted(role_permissions),
+        extra_permissions=sorted(permission.code for permission in user.extra_permissions),
+        disabled_permissions=sorted(permission.code for permission in user.disabled_permissions),
+        permissions=sorted(user.permission_codes),
+    )
+
+
+def _serialize_user_option(user: User) -> UserOptionRead:
+    return UserOptionRead(
+        id=user.id,
+        username=user.username,
+        real_name=user.real_name,
+        department=user.department,
+        status=user.status,
+        roles=[role.code for role in user.roles],
+    )
+
+
+def _serialize_role(role: Role) -> RoleRead:
+    return RoleRead(
+        id=role.id,
+        code=role.code,
+        name=role.name,
+        status=role.status,
+        permissions=sorted(permission.code for permission in role.permissions),
     )
 
 
 def _assert_user_list_permission(current_user: User) -> None:
-    if "system:permission" not in current_user.permission_codes and "work_order:dispatch" not in current_user.permission_codes:
+    if "system:permission" not in current_user.permission_codes:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied")
+
+
+def _assert_user_option_permission(current_user: User) -> None:
+    if not USER_OPTION_PERMISSIONS.intersection(current_user.permission_codes):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied")
 
 
@@ -47,6 +90,20 @@ def _get_roles_by_code(db: Session, role_codes: list[str]) -> list[Role]:
     return roles
 
 
+def _get_permissions_by_code(db: Session, permission_codes: list[str]) -> list[Permission]:
+    if not permission_codes:
+        return []
+    permissions = db.query(Permission).filter(Permission.code.in_(permission_codes)).all()
+    found_codes = {permission.code for permission in permissions}
+    missing = sorted(set(permission_codes) - found_codes)
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unknown permissions: {', '.join(missing)}",
+        )
+    return permissions
+
+
 @router.get("", response_model=list[UserRead])
 def list_users(
     role_code: str | None = None,
@@ -55,8 +112,12 @@ def list_users(
     current_user: User = Depends(get_current_user),
 ) -> list[UserRead]:
     _assert_user_list_permission(current_user)
-    query = db.query(User).options(selectinload(User.roles))
-    if "system:permission" not in current_user.permission_codes or not include_disabled:
+    query = db.query(User).options(
+        selectinload(User.roles).selectinload(Role.permissions),
+        selectinload(User.extra_permissions),
+        selectinload(User.disabled_permissions),
+    )
+    if not include_disabled:
         query = query.filter(User.status == "active", User.deleted_at.is_(None))
     if role_code:
         query = query.filter(User.roles.any(code=role_code))
@@ -64,12 +125,41 @@ def list_users(
     return [_serialize_user(user) for user in users]
 
 
+@router.get("/options", response_model=list[UserOptionRead])
+def list_user_options(
+    role_code: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[UserOptionRead]:
+    _assert_user_option_permission(current_user)
+    query = db.query(User).options(selectinload(User.roles)).filter(User.status == "active", User.deleted_at.is_(None))
+    if role_code:
+        query = query.filter(User.roles.any(code=role_code))
+    users = query.order_by(User.real_name, User.username).all()
+    return [_serialize_user_option(user) for user in users]
+
+
 @router.get("/roles", response_model=list[RoleRead])
 def list_roles(
     db: Session = Depends(get_db),
     _=Depends(require_permission("system:permission")),
-) -> list[Role]:
-    return db.query(Role).filter(Role.status == "active").order_by(Role.code).all()
+) -> list[RoleRead]:
+    roles = (
+        db.query(Role)
+        .options(selectinload(Role.permissions))
+        .filter(Role.status == "active")
+        .order_by(Role.code)
+        .all()
+    )
+    return [_serialize_role(role) for role in roles]
+
+
+@router.get("/permissions", response_model=list[PermissionRead])
+def list_permissions(
+    db: Session = Depends(get_db),
+    _=Depends(require_permission("system:permission")),
+) -> list[Permission]:
+    return db.query(Permission).order_by(Permission.sort_no, Permission.code).all()
 
 
 @router.post("", response_model=UserRead, status_code=status.HTTP_201_CREATED)
@@ -92,6 +182,8 @@ def create_user(
         status=payload.status,
     )
     user.roles = _get_roles_by_code(db, payload.roles)
+    user.extra_permissions = _get_permissions_by_code(db, payload.extra_permissions)
+    user.disabled_permissions = _get_permissions_by_code(db, payload.disabled_permissions)
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -105,7 +197,11 @@ def update_user(
     db: Session = Depends(get_db),
     _=Depends(require_permission("system:permission")),
 ) -> UserRead:
-    user = db.query(User).options(selectinload(User.roles)).filter(User.id == user_id).first()
+    user = db.query(User).options(
+        selectinload(User.roles),
+        selectinload(User.extra_permissions),
+        selectinload(User.disabled_permissions),
+    ).filter(User.id == user_id).first()
     if user is None or user.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
@@ -117,6 +213,10 @@ def update_user(
             setattr(user, field, updates[field])
     if payload.roles is not None:
         user.roles = _get_roles_by_code(db, payload.roles)
+    if payload.extra_permissions is not None:
+        user.extra_permissions = _get_permissions_by_code(db, payload.extra_permissions)
+    if payload.disabled_permissions is not None:
+        user.disabled_permissions = _get_permissions_by_code(db, payload.disabled_permissions)
 
     db.commit()
     db.refresh(user)

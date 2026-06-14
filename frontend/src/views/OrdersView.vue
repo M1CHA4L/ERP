@@ -12,20 +12,34 @@
         <el-select v-model="orderTypeFilter" placeholder="订单类型" clearable>
           <el-option v-for="type in orderTypeOptions" :key="type.value" :label="type.label" :value="type.value" />
         </el-select>
+        <el-input
+          v-model="keyword"
+          class="order-search"
+          clearable
+          :prefix-icon="Search"
+          placeholder="Order no / customer / product"
+          @keyup.enter="loadOrders"
+        />
         <el-button :icon="Refresh" @click="loadOrders">刷新</el-button>
       </div>
       <div class="toolbar-left">
         <el-button type="success" :icon="Download" v-permission="'report:export'" @click="exportOrders">
           导出 Excel
         </el-button>
-        <el-button type="primary" :icon="Plus" v-permission="'order:create'" @click="openCreateDrawer">新建订单</el-button>
+        <el-button type="primary" :icon="Plus" v-permission="'order:create'" @click="openCreateDrawer">新建委托书</el-button>
       </div>
     </div>
 
     <el-card shadow="never" class="table-card">
       <el-table :data="orders" stripe @row-dblclick="goDetail">
-        <el-table-column prop="order_no" label="订单编号" min-width="190" />
-        <el-table-column label="类型" width="110">
+        <el-table-column prop="order_no" label="订单编号" min-width="190">
+          <template #default="{ row }">
+            <el-button class="order-no-link" text type="primary" @click.stop="goDetail(row)">
+              {{ row.order_no }}
+            </el-button>
+          </template>
+        </el-table-column>
+        <el-table-column label="类型" width="170" show-overflow-tooltip>
           <template #default="{ row }">{{ orderTypeLabel(row.plate_details?.order_type) }}</template>
         </el-table-column>
         <el-table-column prop="product_summary" label="产品" min-width="180" />
@@ -39,23 +53,30 @@
             <el-tag>{{ statusLabel(orderStatusMap, row.status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="300" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
-            <el-button text type="primary" @click.stop="goDetail(row)">详情</el-button>
-            <el-button text type="primary" @click.stop="goEntrust(row)">委托书</el-button>
-            <el-button text type="primary" @click.stop="printProductionOrder(row)">生产单</el-button>
-            <el-button text type="danger" v-permission="'order:cancel'" @click.stop="deleteOrder(row)">删除</el-button>
+            <div class="order-row-actions">
+              <el-button text type="primary" @click.stop="goEntrust(row)">委托书</el-button>
+              <el-button text type="primary" @click.stop="printProductionOrder(row)">生产单</el-button>
+              <el-button text type="danger" v-permission="'order:cancel'" @click.stop="deleteOrder(row)">删除</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
 
-    <el-drawer v-model="drawerVisible" title="新建订单" size="94%">
+    <el-drawer v-model="drawerVisible" title="新建委托书订单" size="74%" class="order-create-drawer">
       <el-form :model="form" label-position="top" class="order-form">
         <div class="form-grid">
           <el-form-item label="客户">
             <el-select v-model="form.customer_id" filterable placeholder="选择客户" @change="applyCustomer">
-              <el-option v-for="customer in customers" :key="customer.id" :label="customer.name" :value="customer.id" />
+              <el-option v-for="customer in customers" :key="customer.id" :label="customer.name" :value="customer.id">
+                <div class="customer-option">
+                  <span>{{ customer.name }}</span>
+                  <el-tag v-if="isCurrentUserCustomer(customer)" size="small" type="success" effect="plain">相关</el-tag>
+                  <small>{{ customer.customer_code }}</small>
+                </div>
+              </el-option>
             </el-select>
           </el-form-item>
           <el-form-item label="订单类型">
@@ -66,15 +87,20 @@
           <el-form-item label="交期">
             <el-date-picker v-model="form.due_date" value-format="YYYY-MM-DD" type="date" placeholder="选择交期" />
           </el-form-item>
-          <el-form-item label="整单默认工艺路线">
-            <el-select v-model="form.route_id" clearable placeholder="可选，未选时按明细行路线">
-              <el-option v-for="route in activeRoutes" :key="route.id" :label="route.name" :value="route.id" />
-            </el-select>
-          </el-form-item>
           <el-form-item label="优先级">
             <el-select v-model="form.priority">
               <el-option label="普通" value="normal" />
               <el-option label="加急" value="urgent" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="Salesman">
+            <el-select v-model="form.plate_details.salesman" filterable allow-create default-first-option clearable>
+              <el-option v-for="user in users" :key="`salesman-${user.id}`" :label="user.real_name || user.username" :value="user.real_name || user.username" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="Lister">
+            <el-select v-model="form.plate_details.lister" filterable allow-create default-first-option clearable>
+              <el-option v-for="user in users" :key="`lister-${user.id}`" :label="user.real_name || user.username" :value="user.real_name || user.username" />
             </el-select>
           </el-form-item>
         </div>
@@ -95,18 +121,191 @@
                 </span>
               </template>
             </el-alert>
-            <div class="field-grid">
-              <el-form-item label="Customer">
-                <el-input v-model="form.plate_details.customer_text" />
+            <div v-if="customerMaterials.length" class="material-use-grid">
+              <el-form-item label="Customer Material">
+                <el-select
+                  v-model="selectedCustomerMaterialLotId"
+                  clearable
+                  filterable
+                  placeholder="Select material lot"
+                  @change="applyCustomerMaterialSelection"
+                >
+                  <el-option
+                    v-for="material in customerMaterials"
+                    :key="material.id"
+                    :label="`${material.lot_no} · ${material.product_name} · ${material.quantity_on_hand}${material.unit}`"
+                    :value="material.id"
+                  />
+                </el-select>
               </el-form-item>
-              <el-form-item label="Product Name">
-                <el-input v-model="form.plate_details.product_name" @change="syncPlateToFirstItem" />
+              <el-form-item label="Use Qty">
+                <el-input-number
+                  v-model="customerMaterialUseQty"
+                  :min="0"
+                  :max="selectedCustomerMaterial ? selectedCustomerMaterial.quantity_on_hand : undefined"
+                  :precision="3"
+                  class="full-number"
+                  @change="syncCustomerMaterialQty"
+                />
               </el-form-item>
-              <el-form-item label="Total QTY">
-                <el-input v-model="form.plate_details.total_qty" @change="syncPlateToFirstItem" />
+              <el-form-item v-if="selectedCustomerMaterial" label="Available">
+                <el-tag type="info">
+                  {{ selectedCustomerMaterial.quantity_on_hand }}{{ selectedCustomerMaterial.unit }}
+                </el-tag>
               </el-form-item>
+            </div>
+            <el-alert
+              v-if="customerPriceRules.length"
+              type="info"
+              :closable="false"
+              show-icon
+              class="customer-price-alert"
+            >
+              <template #title>
+                <span>Customer price rules loaded: {{ customerPriceRules.length }}</span>
+                <span v-if="customerPriceHint" class="customer-price-hint">{{ customerPriceHint }}</span>
+                <el-button size="small" text type="primary" @click.stop="applyCustomerPriceToFirstItem(true)">
+                  Apply Price
+                </el-button>
+              </template>
+            </el-alert>
+            <div class="plate-number-panel">
+              <div class="panel-title">
+                <span>Plate No.</span>
+                <el-tag type="info">{{ availablePlateNumbers.length }} available</el-tag>
+              </div>
+              <div v-if="form.plate_details.order_type === 'new_cylinder'" class="plate-number-grid">
+                <el-form-item label="Plate Type">
+                  <el-select v-model="form.plate_details.plate_number_kind" @change="handlePlateKindChange">
+                    <el-option v-for="type in plateNumberKindOptions" :key="type.value" :label="type.label" :value="type.value" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="Request QTY">
+                  <el-input-number v-model="plateNumberRequestCount" :min="1" :max="50" class="full-number" />
+                </el-form-item>
+                <el-form-item label="Request">
+                  <el-button type="primary" :loading="requestingPlateNumbers" @click="requestPlateNumbers">Request Plate No.</el-button>
+                </el-form-item>
+                <el-form-item label="Available Plate No." class="plate-number-select">
+                  <el-select
+                    v-model="form.plate_details.reserved_plate_number_id"
+                    filterable
+                    clearable
+                    placeholder="Select available plate no."
+                    @change="applyReservedPlateNumber"
+                  >
+                    <el-option v-for="plate in availablePlateNumbers" :key="plate.id" :label="plate.plate_no" :value="plate.id" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="Return">
+                  <el-button :disabled="!form.plate_details.reserved_plate_number_id" @click="returnSelectedPlateNumber">Return Plate No.</el-button>
+                </el-form-item>
+              </div>
+              <div v-else-if="form.plate_details.order_type === 'old_cylinder'" class="plate-number-grid derived-plate-grid">
+                <el-form-item label="Original Plate No.">
+                  <el-input v-model="form.plate_details.derived_source_cylinder_no" @change="loadDerivedPlatePreview" />
+                </el-form-item>
+                <el-form-item label="Generate Type">
+                  <el-select v-model="form.plate_details.derivation_type" @change="loadDerivedPlatePreview">
+                    <el-option v-for="type in revisionTypeOptions" :key="type.value" :label="type.label" :value="type.value" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="New Plate No.">
+                  <el-input v-model="form.plate_details.cylinder_id" readonly />
+                </el-form-item>
+                <el-form-item label="Preview">
+                  <el-button :loading="previewingPlateNumber" @click="loadDerivedPlatePreview">Preview Plate No.</el-button>
+                </el-form-item>
+              </div>
+              <div v-else-if="form.plate_details.order_type === 'rework'" class="plate-number-grid derived-plate-grid">
+                <el-form-item label="Original Plate No.">
+                  <el-input v-model="form.plate_details.rework_source_cylinder_no" @change="loadDerivedPlatePreview" />
+                </el-form-item>
+                <el-form-item label="Rework Type">
+                  <el-select v-model="form.plate_details.derivation_type" @change="loadDerivedPlatePreview">
+                    <el-option v-for="type in reworkTypeOptions" :key="type.value" :label="type.label" :value="type.value" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="New Plate No.">
+                  <el-input v-model="form.plate_details.cylinder_id" readonly />
+                </el-form-item>
+                <el-form-item label="Preview">
+                  <el-button :loading="previewingPlateNumber" @click="loadDerivedPlatePreview">Preview Plate No.</el-button>
+                </el-form-item>
+              </div>
+            </div>
+            <div v-if="form.items[0]" class="quick-order-panel">
+              <div class="panel-title">
+                <span>快捷下单</span>
+                <el-tag>合计 {{ formatCurrency(orderTotal) }}</el-tag>
+              </div>
+              <div class="quick-order-grid">
+                <el-form-item label="产品模板">
+                  <el-select
+                    v-model="form.items[0].product_id"
+                    clearable
+                    filterable
+                    placeholder="可选模板"
+                    @change="applyProductTemplate(form.items[0])"
+                  >
+                    <el-option
+                      v-for="product in products"
+                      :key="product.id"
+                      :label="`${product.product_code} · ${product.name}`"
+                      :value="product.id"
+                    />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="Product Name">
+                  <el-input v-model="form.plate_details.product_name" @change="syncPlateToFirstItem" />
+                </el-form-item>
+                <el-form-item label="Total QTY">
+                  <el-input v-model="form.plate_details.total_qty" @change="syncPlateToFirstItem" />
+                </el-form-item>
+                <el-form-item label="规格">
+                  <el-input v-model="form.items[0].specification" placeholder="自动带入，可手动改" />
+                </el-form-item>
+                <el-form-item label="单位">
+                  <el-input v-model="form.items[0].unit" />
+                </el-form-item>
+                <el-form-item label="单价">
+                  <el-input-number v-model="form.items[0].unit_price" :min="0" :precision="2" class="full-number" />
+                </el-form-item>
+              </div>
+            </div>
+            <div v-if="false" class="field-grid">
               <el-form-item label="Unit L">
-                <el-input v-model="form.plate_details.unit_l" />
+                <el-input v-model="form.plate_details.unit_l" @change="syncPlateDimensions" />
+              </el-form-item>
+              <el-form-item label="Straight">
+                <el-select v-model="form.plate_details.straight" @change="syncPlateDimensions">
+                  <el-option v-for="count in repeatCountOptions" :key="count" :label="count" :value="count" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="Unit W">
+                <el-input v-model="form.plate_details.unit_w" @change="syncPlateDimensions" />
+              </el-form-item>
+              <el-form-item label="Crossway">
+                <el-select v-model="form.plate_details.crossway" @change="syncPlateDimensions">
+                  <el-option v-for="count in repeatCountOptions" :key="count" :label="count" :value="count" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="C">
+                <el-input v-model="form.plate_details.c_value" readonly />
+              </el-form-item>
+              <el-form-item label="L">
+                <el-input v-model="form.plate_details.l_value" readonly />
+              </el-form-item>
+              <el-form-item label="Cylinder Making">
+                <el-select v-model="form.plate_details.cylinder_making">
+                  <el-option v-for="option in cylinderMakingOptions" :key="option" :label="option" :value="option" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="Dia">
+                <el-input v-model="form.plate_details.dia" @change="syncDiaSeries" />
+              </el-form-item>
+              <el-form-item label="Increase">
+                <el-input v-model="form.plate_details.increase" @change="syncDiaSeries" />
               </el-form-item>
               <el-form-item label="Original No">
                 <el-input v-model="form.plate_details.original_no" />
@@ -117,14 +316,29 @@
               <el-form-item label="SampleNO">
                 <el-input v-model="form.plate_details.sample_no" />
               </el-form-item>
-              <el-form-item label="Order Date">
-                <el-date-picker v-model="form.plate_details.order_date" value-format="YYYY-MM-DD" type="date" />
+              <el-form-item label="Order Time">
+                <el-input v-model="form.plate_details.order_datetime" disabled />
               </el-form-item>
               <el-form-item label="Printing Method">
-                <el-input v-model="form.plate_details.printing_method" />
+                <el-select v-model="form.plate_details.printing_method">
+                  <el-option v-for="option in printingMethodOptions" :key="option" :label="option" :value="option" />
+                </el-select>
               </el-form-item>
-              <el-form-item label="Printings">
-                <el-input v-model="form.plate_details.printings" />
+              <el-form-item label="Printing Material">
+                <el-select v-model="form.plate_details.printing_material">
+                  <el-option v-for="option in printingMaterialOptions" :key="option" :label="option" :value="option" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="Material">
+                <el-select v-model="form.plate_details.new_material" @change="syncMaterialFields">
+                  <el-option v-for="option in materialSupplyOptions" :key="option.value" :label="option.label" :value="option.value" />
+                </el-select>
+              </el-form-item>
+              <el-form-item v-if="form.plate_details.new_material === 'new+self-bring'" label="New QTY">
+                <el-input v-model="form.plate_details.new_qty" inputmode="numeric" @change="syncMaterialFields" />
+              </el-form-item>
+              <el-form-item v-if="form.plate_details.new_material === 'new+self-bring'" label="Self-bring QTY">
+                <el-input v-model="form.plate_details.self_bring_qty" inputmode="numeric" @change="syncMaterialFields" />
               </el-form-item>
               <el-form-item label="Sign-in Person">
                 <el-input v-model="form.plate_details.sign_in_person" />
@@ -132,64 +346,31 @@
               <el-form-item label="SalesMan">
                 <el-input v-model="form.plate_details.salesman" />
               </el-form-item>
-              <el-form-item label="Lister">
-                <el-input v-model="form.plate_details.lister" />
-              </el-form-item>
               <el-form-item label="Address" class="wide-field">
                 <el-input v-model="form.plate_details.address" />
               </el-form-item>
             </div>
           </el-tab-pane>
 
-          <el-tab-pane label="版辊参数" name="plate">
+          <el-tab-pane v-if="false" label="版胚" name="plate">
             <div class="field-grid">
-              <el-form-item label="Cylinder Model">
-                <el-input v-model="form.plate_details.cylinder_model" />
-              </el-form-item>
-              <el-form-item label="Cylinder Making">
-                <el-input v-model="form.plate_details.cylinder_making" />
-              </el-form-item>
-              <el-form-item label="New Material">
-                <el-input v-model="form.plate_details.new_material" />
-              </el-form-item>
-              <el-form-item label="Unit W">
-                <el-input v-model="form.plate_details.unit_w" />
-              </el-form-item>
-              <el-form-item label="Straight">
-                <el-input v-model="form.plate_details.straight" />
-              </el-form-item>
-              <el-form-item label="Crossway">
-                <el-input v-model="form.plate_details.crossway" />
-              </el-form-item>
-              <el-form-item label="Cylinder ID">
-                <el-input v-model="form.plate_details.cylinder_id" />
-              </el-form-item>
-              <el-form-item label="C">
-                <el-input v-model="form.plate_details.c_value" />
-              </el-form-item>
-              <el-form-item label="L">
-                <el-input v-model="form.plate_details.l_value" />
-              </el-form-item>
-              <el-form-item label="Increase">
-                <el-input v-model="form.plate_details.increase" />
-              </el-form-item>
-              <el-form-item label="Hole">
-                <el-input v-model="form.plate_details.hole" />
-              </el-form-item>
-              <el-form-item label="Flange">
+              <el-form-item label="Flange Width">
                 <el-input v-model="form.plate_details.flange" />
               </el-form-item>
-              <el-form-item label="Slope">
-                <el-input v-model="form.plate_details.slope" />
+              <el-form-item label="Flange Hole">
+                <el-input v-model="form.plate_details.hole" />
               </el-form-item>
-              <el-form-item label="Dynamic Balance">
-                <el-input v-model="form.plate_details.dynamic_balance" />
+              <el-form-item label="Flange Slope">
+                <el-input v-model="form.plate_details.slope" />
               </el-form-item>
               <el-form-item label="Copper Thickness">
                 <el-input v-model="form.plate_details.copper_thickness" />
               </el-form-item>
               <el-form-item label="Key Way">
                 <el-input v-model="form.plate_details.key_way" />
+              </el-form-item>
+              <el-form-item label="Dynamic Balance">
+                <el-input v-model="form.plate_details.dynamic_balance" />
               </el-form-item>
               <el-form-item label="Cylinder Cost">
                 <el-input v-model="form.plate_details.cylinder_cost" />
@@ -200,72 +381,28 @@
               <el-form-item label="Plate Thickness">
                 <el-input v-model="form.plate_details.plate_thickness" />
               </el-form-item>
-              <el-form-item label="Cylinder Structure">
-                <el-input v-model="form.plate_details.cylinder_structure" />
-              </el-form-item>
               <el-form-item label="Bag Type">
                 <el-input v-model="form.plate_details.bag_type" />
               </el-form-item>
               <el-form-item label="Set Type">
                 <el-input v-model="form.plate_details.set_type" />
               </el-form-item>
-              <el-form-item label="Self-bring">
-                <el-input v-model="form.plate_details.self_bring" />
-              </el-form-item>
               <el-form-item label="Production Time">
                 <el-input v-model="form.plate_details.production_time" />
               </el-form-item>
             </div>
+            <el-collapse class="returns-collapse">
+              <el-collapse-item title="Returns / 返还物" name="returns">
+                <div class="field-grid returns-grid">
+                  <el-form-item v-for="item in returnItemFields" :key="item.key" :label="item.label">
+                    <el-input v-model="form.plate_details[item.key]" inputmode="numeric" @change="syncReturnsSummary" />
+                  </el-form-item>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
           </el-tab-pane>
 
-          <el-tab-pane label="要求备注" name="requirements">
-            <div class="field-grid">
-              <el-form-item label="Common Remarks" class="wide-field">
-                <el-input v-model="form.plate_details.common_remarks" />
-              </el-form-item>
-              <el-form-item label="Returns">
-                <el-input v-model="form.plate_details.returns" />
-              </el-form-item>
-              <el-form-item label="Archives">
-                <el-input v-model="form.plate_details.archives" />
-              </el-form-item>
-              <el-form-item label="Inspection Requirement" class="wide-field">
-                <el-input v-model="form.plate_details.inspection_requirement" />
-              </el-form-item>
-              <el-form-item label="Mark Line">
-                <el-input v-model="form.plate_details.mark_line" />
-              </el-form-item>
-              <el-form-item label="Test Line">
-                <el-input v-model="form.plate_details.test_line" />
-              </el-form-item>
-              <el-form-item label="Test Spot">
-                <el-input v-model="form.plate_details.test_spot" />
-              </el-form-item>
-              <el-form-item label="Computer Position">
-                <el-input v-model="form.plate_details.computer_position" />
-              </el-form-item>
-              <el-form-item label="Production Position">
-                <el-input v-model="form.plate_details.production_position" />
-              </el-form-item>
-              <el-form-item label="Engraving Requirement" class="wide-field">
-                <el-input v-model="form.plate_details.engraving_requirement" />
-              </el-form-item>
-              <el-form-item label="Proofing Requirement" class="wide-field">
-                <el-input v-model="form.plate_details.proofing_requirement" />
-              </el-form-item>
-              <el-form-item label="Computer Requirement" class="wide-field">
-                <el-input v-model="form.plate_details.computer_requirement" type="textarea" :rows="3" />
-              </el-form-item>
-              <el-form-item label="Color Separation" class="wide-field">
-                <el-input v-model="form.plate_details.color_separation" type="textarea" :rows="3" />
-              </el-form-item>
-              <el-form-item label="Engraving Note" class="wide-field">
-                <el-input v-model="form.plate_details.engraving_note" type="textarea" :rows="3" />
-              </el-form-item>
-            </div>
-          </el-tab-pane>
-
-          <el-tab-pane v-if="form.plate_details.order_type === 'dechrome'" label="退镀下单" name="dechrome">
+          <el-tab-pane v-if="false && form.plate_details.order_type === 'dechrome'" label="Dechrome" name="dechrome">
             <div class="field-grid">
               <el-form-item label="Date">
                 <el-date-picker v-model="form.plate_details.order_date" value-format="YYYY-MM-DD" type="date" />
@@ -299,8 +436,8 @@
               </el-form-item>
               <el-form-item label="Charge">
                 <el-select v-model="form.plate_details.charge">
-                  <el-option label="收费" value="yes" />
-                  <el-option label="不收费" value="no" />
+                  <el-option label="Chargeable" value="yes" />
+                  <el-option label="Free" value="no" />
                 </el-select>
               </el-form-item>
               <el-form-item label="总支数">
@@ -324,7 +461,7 @@
             </div>
           </el-tab-pane>
 
-          <el-tab-pane v-if="form.plate_details.order_type === 'rework'" label="返工表" name="rework">
+          <el-tab-pane v-if="false && form.plate_details.order_type === 'rework'" label="Rework" name="rework">
             <div class="field-grid">
               <el-form-item label="返工来源版号">
                 <el-input v-model="form.plate_details.rework_source_cylinder_no" />
@@ -335,10 +472,10 @@
               <el-form-item label="返工数量">
                 <el-input v-model="form.plate_details.rework_quantity" />
               </el-form-item>
-              <el-form-item label="是否收费">
+              <el-form-item label="Charge">
                 <el-select v-model="form.plate_details.rework_chargeable">
-                  <el-option label="收费" value="yes" />
-                  <el-option label="不收费" value="no" />
+                  <el-option label="Chargeable" value="yes" />
+                  <el-option label="Free" value="no" />
                 </el-select>
               </el-form-item>
               <el-form-item label="返工原因" class="wide-field">
@@ -350,9 +487,9 @@
             </div>
           </el-tab-pane>
 
-          <el-tab-pane label="颜色明细" name="colors">
+          <el-tab-pane v-if="false" label="颜色明细" name="colors">
             <div class="table-tools">
-              <span>颜色 / 数量 / 直径 / 印刷方法</span>
+              <span>颜色 / 数量 / 直径</span>
               <el-button type="primary" :icon="Plus" @click="addColorRow">新增颜色</el-button>
             </div>
             <el-table :data="form.color_rows" row-key="uid" class="dense-table">
@@ -374,9 +511,6 @@
               <el-table-column label="Public No." min-width="130">
                 <template #default="{ row }"><el-input v-model="row.public_no" /></template>
               </el-table-column>
-              <el-table-column label="Printing Method" min-width="150">
-                <template #default="{ row }"><el-input v-model="row.printing_method" /></template>
-              </el-table-column>
               <el-table-column label="Remarks" min-width="150">
                 <template #default="{ row }"><el-input v-model="row.remarks" /></template>
               </el-table-column>
@@ -388,84 +522,11 @@
             </el-table>
           </el-tab-pane>
 
-          <el-tab-pane label="订单明细" name="items">
-            <div class="table-tools">
-              <div class="panel-title">
-                <span>订单明细</span>
-                <el-tag>合计 {{ formatCurrency(orderTotal) }}</el-tag>
-              </div>
-              <el-button type="primary" :icon="Plus" @click="addItem">新增明细</el-button>
-            </div>
-            <el-table :data="form.items" row-key="uid" class="dense-table">
-              <el-table-column label="产品模板" min-width="190">
-                <template #default="{ row }">
-                  <el-select
-                    v-model="row.product_id"
-                    clearable
-                    filterable
-                    placeholder="可选模板"
-                    @change="applyProductTemplate(row)"
-                  >
-                    <el-option
-                      v-for="product in products"
-                      :key="product.id"
-                      :label="`${product.product_code} · ${product.name}`"
-                      :value="product.id"
-                    />
-                  </el-select>
-                </template>
-              </el-table-column>
-              <el-table-column label="产品名称" min-width="170">
-                <template #default="{ row }">
-                  <el-input v-model="row.product_name" placeholder="可手动填写" />
-                </template>
-              </el-table-column>
-              <el-table-column label="规格" min-width="150">
-                <template #default="{ row }">
-                  <el-input v-model="row.specification" placeholder="可手动填写" />
-                </template>
-              </el-table-column>
-              <el-table-column label="单位" width="100">
-                <template #default="{ row }">
-                  <el-input v-model="row.unit" />
-                </template>
-              </el-table-column>
-              <el-table-column label="数量" width="130">
-                <template #default="{ row }">
-                  <el-input-number v-model="row.quantity" :min="0.001" :precision="3" />
-                </template>
-              </el-table-column>
-              <el-table-column label="单价" width="130">
-                <template #default="{ row }">
-                  <el-input-number v-model="row.unit_price" :min="0" :precision="2" />
-                </template>
-              </el-table-column>
-              <el-table-column label="路线" min-width="150">
-                <template #default="{ row }">
-                  <el-select v-model="row.route_id" clearable placeholder="可选">
-                    <el-option v-for="route in activeRoutes" :key="route.id" :label="route.name" :value="route.id" />
-                  </el-select>
-                </template>
-              </el-table-column>
-              <el-table-column label="金额" width="110">
-                <template #default="{ row }">{{ formatCurrency(itemAmount(row)) }}</template>
-              </el-table-column>
-              <el-table-column label="操作" width="130" fixed="right">
-                <template #default="{ row, $index }">
-                  <el-button text type="primary" @click="duplicateItem(row)">复制</el-button>
-                  <el-button text type="danger" :disabled="form.items.length === 1" @click="removeItem($index)">删除</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-          </el-tab-pane>
         </el-tabs>
 
-        <el-form-item label="备注">
-          <el-input v-model="form.remark" type="textarea" />
-        </el-form-item>
         <div class="drawer-actions">
           <el-button @click="drawerVisible = false">取消</el-button>
-          <el-button type="primary" :loading="saving" @click="createOrder">保存草稿</el-button>
+          <el-button type="primary" :loading="saving" @click="createOrder">保存并打开委托书</el-button>
         </div>
       </el-form>
     </el-drawer>
@@ -476,10 +537,11 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Download, Plus, Refresh } from '@element-plus/icons-vue'
+import { Download, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { apiClient } from '../api/client'
-import type { Customer, InventoryLot, PageResponse, ProcessRoute, Product, SalesOrder } from '../api/types'
-import { hasPermission } from '../stores/session'
+import type { Customer, InventoryLot, PageResponse, PlateNumberReservation, Product, SalesOrder, UserOption } from '../api/types'
+import { hasPermission, session } from '../stores/session'
+import { customerUserPriority, sortCustomersForCurrentUser } from '../utils/customerPriority'
 import { formatCurrency } from '../utils/format'
 import { orderStatusMap, statusLabel } from '../utils/status'
 
@@ -491,13 +553,14 @@ interface OrderItemForm {
   quantity: number
   unit: string
   unit_price: number
-  route_id: string
   remark: string
 }
 
 interface PlateDetailsForm {
   [key: string]: string
 }
+
+type CustomerPriceRule = NonNullable<Customer['price_rules']>[number]
 
 interface ColorRowForm {
   uid: string
@@ -512,20 +575,27 @@ interface ColorRowForm {
 }
 
 const router = useRouter()
+const keyword = ref('')
 const statusFilter = ref('')
 const orderTypeFilter = ref('')
 const orders = ref<SalesOrder[]>([])
 const customers = ref<Customer[]>([])
-const routes = ref<ProcessRoute[]>([])
 const products = ref<Product[]>([])
+const users = ref<UserOption[]>([])
 const customerMaterials = ref<InventoryLot[]>([])
+const selectedCustomerMaterialLotId = ref('')
+const customerMaterialUseQty = ref<number | undefined>(undefined)
+const customerPriceRules = ref<CustomerPriceRule[]>([])
+const plateNumbers = ref<PlateNumberReservation[]>([])
 const drawerVisible = ref(false)
 const saving = ref(false)
+const requestingPlateNumbers = ref(false)
+const previewingPlateNumber = ref(false)
+const plateNumberRequestCount = ref(1)
 const activeCreateTab = ref('basic')
 
 const form = reactive({
   customer_id: '',
-  route_id: '',
   due_date: '',
   priority: 'normal',
   remark: '',
@@ -535,21 +605,65 @@ const form = reactive({
 })
 
 const orderTotal = computed(() => form.items.reduce((sum, item) => sum + itemAmount(item), 0))
-const activeRoutes = computed(() => routes.value.filter((route) => route.status === 'active'))
+const selectedCustomerMaterial = computed(
+  () => customerMaterials.value.find((material) => material.id === selectedCustomerMaterialLotId.value) || null
+)
+const customerPriceHint = computed(() => {
+  const rule = findCustomerPriceRule()
+  const price = priceFromCustomerRule(rule)
+  return price === null ? '' : `matched unit price: ${formatCurrency(price)}`
+})
 const canViewHistory = computed(() => hasPermission('order:history:view'))
 const historyStatuses = new Set(['paid', 'archived', 'cancelled'])
-const orderTypeOptions = [
-  { label: '新版下单', value: 'new_cylinder' },
-  { label: '旧版/加做', value: 'old_cylinder' },
-  { label: '退镀下单', value: 'dechrome' },
-  { label: '返工表', value: 'rework' }
+const platePrefixByKind: Record<string, string> = {
+  normal: 'S',
+  ppl: 'P',
+  special: 'B'
+}
+const plateNumberKindOptions = [
+  { label: 'Normal (S)', value: 'normal' },
+  { label: 'PPL (P)', value: 'ppl' },
+  { label: 'Special Plate (B)', value: 'special' }
 ]
+const revisionTypeOptions = [
+  { label: 'Revision (C)', value: 'revision' },
+  { label: 'Remake (R)', value: 'remake' }
+]
+const reworkTypeOptions = [
+  { label: 'Internal Rework (IR)', value: 'internal_rework' },
+  { label: 'External Rework (OR)', value: 'external_rework' },
+  { label: 'Remake (R)', value: 'remake' }
+]
+const orderTypeOptions = [
+  { label: 'New Cylinder', value: 'new_cylinder' },
+  { label: 'Revision / Remake', value: 'old_cylinder' },
+  { label: 'Dechrome (Chargeable / Free)', value: 'dechrome' },
+  { label: 'Rework (Chargeable / Free)', value: 'rework' }
+]
+const repeatCountOptions = Array.from({ length: 20 }, (_, index) => String(index + 1))
+const cylinderMakingOptions = ['Steel bending', 'Iron pipe']
+const printingMethodOptions = ['inside', 'outside', 'outside+inside', 'inside+outside']
+const printingMaterialOptions = ['PET', 'OPP', 'PE', 'Paper']
+const materialSupplyOptions = [
+  { label: 'New', value: 'new' },
+  { label: 'Self-bring', value: 'self-bring' },
+  { label: 'New + Self-bring', value: 'new+self-bring' }
+]
+const returnItemFields = [
+  { key: 'returns_color_print', label: 'Color Print' },
+  { key: 'returns_laser_print', label: 'Laser Print' },
+  { key: 'returns_sample', label: 'Sample' },
+  { key: 'returns_chromalin_print', label: 'Chromalin Print' },
+  { key: 'returns_color_separation', label: 'Color Separation' },
+  { key: 'returns_proofing_color_print', label: 'Proofing color Print' }
+] as const
 
 const plateKeys = [
   'order_type',
   'customer_text',
   'product_name',
   'total_qty',
+  'unit',
   'unit_l',
   'straight',
   'cylinder_id',
@@ -559,9 +673,15 @@ const plateKeys = [
   'cylinder_model',
   'cylinder_making',
   'new_material',
+  'material',
+  'printing_material',
+  'new_qty',
+  'self_bring_qty',
   'unit_w',
   'crossway',
   'order_date',
+  'order_datetime',
+  'order_time',
   'dynamic_balance',
   'slope',
   'original_no',
@@ -614,15 +734,67 @@ const plateKeys = [
   'rework_target_step',
   'rework_quantity',
   'rework_chargeable',
-  'dia'
+  'reserved_plate_number_id',
+  'plate_number_kind',
+  'derivation_type',
+  'derived_source_cylinder_no',
+  'old_cyl_no',
+  'dia',
+  'width',
+  'hor_ver',
+  'returns_color_print',
+  'returns_laser_print',
+  'returns_sample',
+  'returns_chromalin_print',
+  'returns_color_separation',
+  'returns_proofing_color_print'
 ]
+
+const currentPlatePrefix = computed(() => platePrefixByKind[form.plate_details.plate_number_kind || 'normal'] || 'S')
+const availablePlateNumbers = computed(() =>
+  plateNumbers.value.filter((item) => item.status === 'reserved' && item.prefix === currentPlatePrefix.value)
+)
+const selectedReservation = computed(() =>
+  plateNumbers.value.find((item) => item.id === form.plate_details.reserved_plate_number_id)
+)
 
 function newUid() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
+function formatLocalDate(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function formatLocalTime(date: Date) {
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  return `${hours}:${minutes}:${seconds}`
+}
+
+function formatLocalDateTime(date: Date) {
+  return `${formatLocalDate(date)} ${formatLocalTime(date)}`
+}
+
+function stampOrderSubmitTime() {
+  const now = new Date()
+  form.plate_details.order_datetime = formatLocalDateTime(now)
+  form.plate_details.order_date = formatLocalDate(now)
+  form.plate_details.order_time = formatLocalTime(now)
+}
+
 function todayString() {
-  return new Date().toISOString().slice(0, 10)
+  return formatLocalDate(new Date())
+}
+
+function datePlusDays(days: number) {
+  const date = new Date()
+  date.setDate(date.getDate() + days)
+  return formatLocalDate(date)
 }
 
 function blankPlateDetails(): PlateDetailsForm {
@@ -652,23 +824,63 @@ function blankItem(): OrderItemForm {
     quantity: 1,
     unit: '件',
     unit_price: 0,
-    route_id: '',
     remark: ''
   }
 }
 
+function resetCustomerMaterialUse(clearPlateFields = false) {
+  selectedCustomerMaterialLotId.value = ''
+  customerMaterialUseQty.value = undefined
+  if (!clearPlateFields) return
+  form.plate_details.self_bring_qty = ''
+  form.plate_details.self_bring = ''
+  if (form.plate_details.new_material === 'self-bring' || form.plate_details.material === 'self-bring') {
+    form.plate_details.new_material = 'new'
+    form.plate_details.material = 'new'
+    syncMaterialFields()
+  }
+}
+
 function resetForm() {
+  const now = new Date()
   Object.assign(form, {
     customer_id: '',
-    route_id: '',
-    due_date: '',
+    due_date: datePlusDays(3),
     priority: 'normal',
     remark: '',
-    plate_details: { ...blankPlateDetails(), order_type: 'new_cylinder', order_date: todayString() },
+      plate_details: {
+        ...blankPlateDetails(),
+        order_type: 'new_cylinder',
+        plate_number_kind: 'normal',
+        derivation_type: 'revision',
+        order_date: formatLocalDate(now),
+        order_datetime: formatLocalDateTime(now),
+        order_time: formatLocalTime(now),
+        straight: '1',
+        crossway: '1',
+        cylinder_making: 'Steel bending',
+        printing_method: 'inside',
+        printing_material: 'PET',
+        new_material: 'new',
+        material: 'new',
+        new_qty: '',
+        self_bring_qty: '',
+        returns_color_print: '0',
+        returns_laser_print: '0',
+        returns_sample: '0',
+        returns_chromalin_print: '0',
+        returns_color_separation: '0',
+        returns_proofing_color_print: '0',
+        charge: 'yes',
+        rework_chargeable: 'yes'
+    },
     color_rows: [blankColorRow()],
     items: [blankItem()]
   })
   customerMaterials.value = []
+  resetCustomerMaterialUse(true)
+  customerPriceRules.value = []
+  plateNumberRequestCount.value = 1
   activeCreateTab.value = 'basic'
 }
 
@@ -681,22 +893,31 @@ function itemAmount(item: OrderItemForm) {
 }
 
 function orderTypeLabel(value: unknown) {
-  return orderTypeOptions.find((type) => type.value === String(value || 'new_cylinder'))?.label || '新版下单'
+  return orderTypeOptions.find((type) => type.value === String(value || 'new_cylinder'))?.label || 'New Cylinder'
 }
 
 function applyOrderType() {
-  if (form.plate_details.order_type === 'dechrome') {
+  form.plate_details.reserved_plate_number_id = ''
+  form.plate_details.original_no = ''
+  form.plate_details.derived_source_cylinder_no = ''
+  form.plate_details.rework_source_cylinder_no = ''
+  clearPrimaryPlateNumber()
+  if (form.plate_details.order_type === 'new_cylinder') {
+    form.plate_details.plate_number_kind = form.plate_details.plate_number_kind || 'normal'
+    form.plate_details.derivation_type = 'revision'
+    activeCreateTab.value = 'basic'
+  } else if (form.plate_details.order_type === 'old_cylinder') {
+    form.plate_details.derivation_type = 'revision'
+    activeCreateTab.value = 'basic'
+  } else if (form.plate_details.order_type === 'dechrome') {
     activeCreateTab.value = 'dechrome'
     form.priority = 'urgent'
   } else if (form.plate_details.order_type === 'rework') {
+    form.plate_details.derivation_type = 'internal_rework'
     activeCreateTab.value = 'rework'
     form.priority = 'urgent'
   }
-}
-
-function isActiveRoute(routeId?: string) {
-  if (!routeId) return true
-  return activeRoutes.value.some((route) => route.id === routeId)
+  applyCustomerPriceToFirstItem(true)
 }
 
 function cleanObject<T extends Record<string, string>>(value: T) {
@@ -714,9 +935,105 @@ function parseQuantity(value: string) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
 }
 
+function parsePlateNumber(value: string | undefined) {
+  const normalized = String(value ?? '').replace(/,/g, '').trim()
+  if (!normalized) return null
+  const parsed = Number(normalized)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function formatPlateNumber(value: number, precision = 2) {
+  return value.toFixed(precision).replace(/\.?0+$/, '')
+}
+
+function syncCValue() {
+  const unitL = parsePlateNumber(form.plate_details.unit_l)
+  const straight = parsePlateNumber(form.plate_details.straight)
+  if (unitL === null || straight === null) return
+  form.plate_details.c_value = formatPlateNumber(unitL * straight, 3)
+}
+
+function syncDiaSeries() {
+  const baseDia = parsePlateNumber(form.plate_details.dia || form.color_rows[0]?.dia)
+  const increase = parsePlateNumber(form.plate_details.increase)
+  if (baseDia === null || increase === null) return
+  form.color_rows.forEach((row, index) => {
+    row.dia = (baseDia + (index * increase) / 100).toFixed(2)
+    row.real_dia ||= row.dia
+  })
+}
+
+function syncColorDefaults() {
+  if (!form.color_rows.length) {
+    form.color_rows.push(blankColorRow())
+  }
+  form.color_rows.forEach((row, index) => {
+    row.color_no ||= String(index - 1)
+    row.printing_method ||= form.plate_details.printing_method || ''
+    if (!row.dia && form.plate_details.dia) row.dia = form.plate_details.dia
+    if (!row.real_dia && row.dia) row.real_dia = row.dia
+  })
+  const first = form.color_rows[0]
+  if (first) {
+    first.qty ||= form.plate_details.total_qty || ''
+  }
+}
+
+function syncEntrustAliases() {
+  const details = form.plate_details
+  const unitParts = [details.unit_l, details.unit_w].map((item) => String(item || '').trim()).filter(Boolean)
+  if (!details.unit && unitParts.length) {
+    details.unit = unitParts.join('*')
+  }
+  const horVerParts = [details.straight, details.crossway].map((item) => String(item || '').trim()).filter(Boolean)
+  if (!details.hor_ver && horVerParts.length) {
+    details.hor_ver = horVerParts.join('*')
+  }
+  details.width ||= details.unit_w || ''
+  details.material_new ||= details.new_material || details.material || ''
+  details.old_cyl_no ||= details.derived_source_cylinder_no || details.rework_source_cylinder_no || details.original_no || ''
+  if (!details.l_value && details.unit_l) details.l_value = details.unit_l
+  syncMaterialFields()
+  syncReturnsSummary()
+}
+
+function syncPlateDimensions() {
+  syncCValue()
+  syncPlateToFirstItem()
+}
+
+function syncMaterialFields() {
+  const materialMode = String(form.plate_details.new_material || form.plate_details.material || 'new')
+  form.plate_details.material = materialMode
+  form.plate_details.material_new = materialMode
+  if (materialMode === 'new') {
+    form.plate_details.new_qty = form.plate_details.total_qty || form.plate_details.new_qty || ''
+    form.plate_details.self_bring_qty = ''
+    form.plate_details.self_bring = '0'
+  } else if (materialMode === 'self-bring') {
+    form.plate_details.self_bring_qty = form.plate_details.self_bring_qty || form.plate_details.total_qty || ''
+    form.plate_details.new_qty = ''
+    form.plate_details.self_bring = form.plate_details.self_bring_qty || '1'
+  } else {
+    form.plate_details.self_bring = form.plate_details.self_bring_qty || ''
+  }
+}
+
+function syncReturnsSummary() {
+  const summary = returnItemFields
+    .map((item) => {
+      const quantity = String(form.plate_details[item.key] || '').trim()
+      return quantity && quantity !== '0' ? `${item.label}: ${quantity}` : ''
+    })
+    .filter(Boolean)
+    .join(' / ')
+  form.plate_details.returns = summary
+}
+
 async function loadOrders() {
   const { data } = await apiClient.get<PageResponse<SalesOrder>>('/sales-orders', {
     params: {
+      keyword: keyword.value || undefined,
       status_filter: statusFilter.value || undefined,
       order_type: orderTypeFilter.value || undefined,
       include_history: statusFilter.value ? historyStatuses.has(statusFilter.value) : false
@@ -725,15 +1042,190 @@ async function loadOrders() {
   orders.value = data.items
 }
 
+async function fetchAllPages<T>(
+  path: string,
+  params: Record<string, string | number | boolean | undefined> = {}
+) {
+  const pageSize = 100
+  let page = 1
+  const items: T[] = []
+
+  while (true) {
+    const { data } = await apiClient.get<PageResponse<T>>(path, {
+      params: {
+        ...params,
+        page,
+        page_size: pageSize
+      }
+    })
+    items.push(...data.items)
+
+    if (items.length >= data.total || data.items.length === 0) {
+      return items
+    }
+
+    page += 1
+  }
+}
+
 async function loadOptions() {
-  const [customerResponse, routeResponse, productResponse] = await Promise.all([
-    apiClient.get<PageResponse<Customer>>('/customers', { params: { page_size: 100 } }),
-    apiClient.get<ProcessRoute[]>('/process-routes'),
-    apiClient.get<PageResponse<Product>>('/products', { params: { page_size: 100, status_filter: 'active' } })
+  const [customerItems, productItems] = await Promise.all([
+    fetchAllPages<Customer>('/customers'),
+    apiClient.get<Product[]>('/products/options').then((response) => response.data)
   ])
-  customers.value = customerResponse.data.items
-  routes.value = routeResponse.data
-  products.value = productResponse.data.items
+  customers.value = sortCustomersForCurrentUser(customerItems, session.user)
+  products.value = productItems
+  try {
+    const { data } = await apiClient.get<UserOption[]>('/users/options', { params: { role_code: 'sales' } })
+    users.value = data
+  } catch {
+    users.value = []
+  }
+  if (form.customer_id) {
+    void applyCustomer()
+  }
+}
+
+function userDisplayName(user?: UserOption) {
+  return user ? user.real_name || user.username : ''
+}
+
+function customerSalesmanName(customer: Customer) {
+  const directName = String(customer.salesperson_name || '').trim()
+  if (directName) return directName
+  const user = users.value.find((item) => item.id === customer.salesperson_id)
+  return userDisplayName(user)
+}
+
+function positiveNumber(value: unknown) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+function matchesRuleRange(value: number | null, minValue: unknown, maxValue: unknown) {
+  if (value === null) return true
+  const min = positiveNumber(minValue)
+  const max = positiveNumber(maxValue)
+  return (min === null || value > min) && (max === null || value <= max)
+}
+
+function currentPlateCm2() {
+  const l = parsePlateNumber(form.plate_details.unit_l || form.plate_details.l_value)
+  const c = parsePlateNumber(form.plate_details.c_value)
+  if (l === null || c === null) return null
+  return l * c
+}
+
+function findCustomerPriceRule() {
+  const l = parsePlateNumber(form.plate_details.unit_l || form.plate_details.l_value)
+  const c = parsePlateNumber(form.plate_details.c_value)
+  const cm2 = currentPlateCm2()
+  return (
+    customerPriceRules.value.find(
+      (rule) =>
+        matchesRuleRange(cm2, rule.min_cm2, rule.max_cm2) &&
+        matchesRuleRange(l, rule.min_l, rule.max_l) &&
+        matchesRuleRange(c, rule.min_c, rule.max_c)
+    ) || null
+  )
+}
+
+function priceFromCustomerRule(rule: CustomerPriceRule | null) {
+  if (!rule) return null
+  const orderType = String(form.plate_details.order_type || 'new_cylinder')
+  if (orderType === 'old_cylinder') {
+    return positiveNumber(rule.old_pcs)
+  }
+  if (orderType === 'dechrome' || orderType === 'rework') {
+    return positiveNumber(rule.repair_chromium_pcs) ?? positiveNumber(rule.old_pcs)
+  }
+  return positiveNumber(rule.special_cyl_price) ?? positiveNumber(rule.old_pcs) ?? positiveNumber(rule.repair_chromium_pcs)
+}
+
+function applyCustomerPriceToFirstItem(force = false) {
+  const firstItem = form.items[0]
+  if (!firstItem) return false
+  const matchedPrice = priceFromCustomerRule(findCustomerPriceRule())
+  const fallbackPrice = positiveNumber(form.plate_details.customer_minimum_price)
+  const nextPrice = matchedPrice ?? fallbackPrice
+  if (nextPrice === null) return false
+  if (!force && Number(firstItem.unit_price || 0) > 0) return false
+  firstItem.unit_price = nextPrice
+  return true
+}
+
+function mergeCustomerOption(customer: Customer) {
+  const index = customers.value.findIndex((item) => item.id === customer.id)
+  const nextCustomers = [...customers.value]
+  if (index >= 0) {
+    nextCustomers.splice(index, 1, customer)
+  } else {
+    nextCustomers.push(customer)
+  }
+  customers.value = sortCustomersForCurrentUser(nextCustomers, session.user)
+}
+
+function isCurrentUserCustomer(customer: Customer) {
+  return Number.isFinite(customerUserPriority(customer, session.user))
+}
+
+async function loadCustomerDetail(customerId: string) {
+  try {
+    const { data } = await apiClient.get<Customer>(`/customers/${customerId}`)
+    mergeCustomerOption(data)
+    return data
+  } catch {
+    return customers.value.find((item) => item.id === customerId) || null
+  }
+}
+
+function applyCustomerDefaults(customer: Customer) {
+  form.plate_details.customer_text = customer.name
+  form.plate_details.address = customer.address || ''
+  form.plate_details.salesman = customerSalesmanName(customer)
+  form.plate_details.customer_minimum_price = customer.minimum_price ? String(customer.minimum_price) : ''
+  customerPriceRules.value = customer.price_rules || []
+  if (customer.lister) {
+    form.plate_details.lister = customer.lister
+  }
+  applyCustomerPriceToFirstItem()
+}
+
+function syncCustomerMaterialQty(value?: number | null) {
+  if (!selectedCustomerMaterial.value) return
+  const quantity = Number(value ?? customerMaterialUseQty.value ?? 0)
+  form.plate_details.self_bring_qty = quantity > 0 ? String(quantity) : ''
+  form.plate_details.self_bring = form.plate_details.self_bring_qty || ''
+}
+
+function applyCustomerMaterialSelection(lotId?: string) {
+  const material = customerMaterials.value.find((item) => item.id === lotId)
+  if (!material) {
+    resetCustomerMaterialUse(true)
+    return
+  }
+  const available = Number(material.quantity_on_hand || 0)
+  const preferredQuantity = Number(form.plate_details.self_bring_qty || form.plate_details.total_qty || 0)
+  customerMaterialUseQty.value = Math.min(available, preferredQuantity > 0 ? preferredQuantity : available)
+  form.plate_details.new_material = 'self-bring'
+  form.plate_details.material = 'self-bring'
+  syncCustomerMaterialQty(customerMaterialUseQty.value)
+  syncMaterialFields()
+  if (!form.plate_details.product_name) {
+    form.plate_details.product_name = material.product_name
+  }
+
+  const firstItem = form.items[0] || blankItem()
+  if (!form.items.length) {
+    form.items.push(firstItem)
+  }
+  if (!firstItem.product_name) {
+    firstItem.product_name = material.product_name
+  }
+  if (!firstItem.specification) {
+    firstItem.specification = material.specification || ''
+  }
+  firstItem.unit = material.unit || firstItem.unit
 }
 
 async function loadCustomerMaterials(customerId: string) {
@@ -742,29 +1234,166 @@ async function loadCustomerMaterials(customerId: string) {
       params: { customer_id: customerId, page_size: 20 }
     })
     customerMaterials.value = data.items
+    if (
+      selectedCustomerMaterialLotId.value &&
+      !customerMaterials.value.some((item) => item.id === selectedCustomerMaterialLotId.value)
+    ) {
+      resetCustomerMaterialUse(true)
+    }
   } catch {
     customerMaterials.value = []
+    resetCustomerMaterialUse(true)
+  }
+}
+
+async function loadPlateNumbers() {
+  try {
+    const { data } = await apiClient.get<PlateNumberReservation[]>('/plate-numbers/my', {
+      params: { status: 'reserved' }
+    })
+    plateNumbers.value = data
+  } catch {
+    plateNumbers.value = []
+  }
+}
+
+function clearPrimaryPlateNumber() {
+  form.plate_details.cylinder_id = ''
+  form.plate_details.no = ''
+  form.plate_details.sample_no = ''
+}
+
+function applyReservedPlateNumber() {
+  const reservation = selectedReservation.value
+  if (!reservation) {
+    clearPrimaryPlateNumber()
+    return
+  }
+  form.plate_details.cylinder_id = reservation.plate_no
+  form.plate_details.no = reservation.plate_no
+  form.plate_details.sample_no = reservation.plate_no
+  form.plate_details.original_no = reservation.plate_no
+}
+
+function handlePlateKindChange() {
+  form.plate_details.reserved_plate_number_id = ''
+  clearPrimaryPlateNumber()
+}
+
+async function requestPlateNumbers() {
+  requestingPlateNumbers.value = true
+  try {
+    const { data } = await apiClient.post<PlateNumberReservation[]>('/plate-numbers/reserve', {
+      plate_number_kind: form.plate_details.plate_number_kind || 'normal',
+      count: plateNumberRequestCount.value
+    })
+    await loadPlateNumbers()
+    if (!form.plate_details.reserved_plate_number_id && data[0]) {
+      form.plate_details.reserved_plate_number_id = data[0].id
+      applyReservedPlateNumber()
+    }
+    ElMessage.success(`Plate numbers reserved: ${data.map((item) => item.plate_no).join(', ')}`)
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    requestingPlateNumbers.value = false
+  }
+}
+
+async function returnSelectedPlateNumber() {
+  const reservation = selectedReservation.value
+  if (!reservation) {
+    ElMessage.warning('请选择要退回的版号')
+    return
+  }
+  try {
+    await apiClient.post(`/plate-numbers/${reservation.id}/return`)
+    ElMessage.success(`Plate number returned: ${reservation.plate_no}`)
+    form.plate_details.reserved_plate_number_id = ''
+    clearPrimaryPlateNumber()
+    await loadPlateNumbers()
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  }
+}
+
+function currentDerivedSourcePlateNo() {
+  if (form.plate_details.order_type === 'rework') {
+    return String(
+      form.plate_details.derived_source_cylinder_no ||
+        form.plate_details.rework_source_cylinder_no ||
+        form.plate_details.original_no ||
+        ''
+    ).trim()
+  }
+  return String(
+    form.plate_details.derived_source_cylinder_no ||
+      form.plate_details.original_no ||
+      form.plate_details.cylinder_id ||
+      form.plate_details.no ||
+      ''
+  ).trim()
+}
+
+async function loadDerivedPlatePreview() {
+  const sourcePlateNo = currentDerivedSourcePlateNo()
+  if (!sourcePlateNo) {
+    ElMessage.warning('请先填写原版号')
+    return false
+  }
+  previewingPlateNumber.value = true
+  try {
+    const { data } = await apiClient.get<{ plate_no: string }>('/plate-numbers/derive-preview', {
+      params: {
+        source_plate_no: sourcePlateNo,
+        derivation_type: form.plate_details.derivation_type || 'revision'
+      }
+    })
+    form.plate_details.derived_source_cylinder_no = sourcePlateNo.toUpperCase()
+    form.plate_details.original_no = sourcePlateNo.toUpperCase()
+    if (form.plate_details.order_type === 'rework') {
+      form.plate_details.rework_source_cylinder_no = sourcePlateNo.toUpperCase()
+    }
+    form.plate_details.cylinder_id = data.plate_no
+    form.plate_details.no = data.plate_no
+    form.plate_details.sample_no = data.plate_no
+    return true
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+    return false
+  } finally {
+    previewingPlateNumber.value = false
   }
 }
 
 function openCreateDrawer() {
   resetForm()
   drawerVisible.value = true
-  if (!customers.value.length || !routes.value.length || !products.value.length) {
+  loadPlateNumbers()
+  if (!customers.value.length || !products.value.length) {
     loadOptions()
   }
 }
 
-function applyCustomer() {
-  const customer = customers.value.find((item) => item.id === form.customer_id)
-  if (!customer) return
-  form.plate_details.customer_text = customer.name
-  if (!form.plate_details.address) {
-    form.plate_details.address = customer.address || ''
+async function applyCustomer() {
+  const customerId = form.customer_id
+  if (!customerId) {
+    customerMaterials.value = []
+    resetCustomerMaterialUse(true)
+    customerPriceRules.value = []
+    form.plate_details.customer_text = ''
+    form.plate_details.address = ''
+    form.plate_details.salesman = ''
+    return
   }
-  if (!form.plate_details.salesman) {
-    form.plate_details.salesman = customer.salesperson_name || ''
+  resetCustomerMaterialUse(true)
+  const cachedCustomer = customers.value.find((item) => item.id === customerId)
+  if (cachedCustomer) {
+    applyCustomerDefaults(cachedCustomer)
   }
+  const customer = await loadCustomerDetail(customerId)
+  if (!customer || form.customer_id !== customerId) return
+  applyCustomerDefaults(customer)
   loadCustomerMaterials(customer.id)
 }
 
@@ -773,15 +1402,19 @@ function syncPlateToFirstItem() {
   if (!form.items.length) {
     form.items.push(firstItem)
   }
-  if (form.plate_details.product_name && !firstItem.product_name) {
+  if (form.plate_details.product_name) {
     firstItem.product_name = form.plate_details.product_name
   }
   if (form.plate_details.total_qty) {
     firstItem.quantity = parseQuantity(form.plate_details.total_qty)
   }
-  if (form.plate_details.unit_l && !firstItem.specification) {
-    firstItem.specification = `L ${form.plate_details.unit_l}`
+  const specification = [form.plate_details.unit_l && `L ${form.plate_details.unit_l}`, form.plate_details.unit_w && `W ${form.plate_details.unit_w}`]
+    .filter(Boolean)
+    .join(' / ')
+  if (specification) {
+    firstItem.specification = specification
   }
+  applyCustomerPriceToFirstItem()
 }
 
 function applyProductTemplate(row: OrderItemForm) {
@@ -791,33 +1424,15 @@ function applyProductTemplate(row: OrderItemForm) {
   row.specification = product.specification || ''
   row.unit = product.unit || '件'
   row.unit_price = Number(product.reference_price || 0)
-  if (!form.plate_details.product_name) {
-    form.plate_details.product_name = product.name
+  form.plate_details.product_name = product.name
+  if (!form.plate_details.total_qty) {
+    form.plate_details.total_qty = String(row.quantity || 1)
   }
-  if (product.default_route_id && isActiveRoute(product.default_route_id)) {
-    row.route_id = product.default_route_id
-  } else if (!row.route_id) {
-    row.route_id = form.route_id
-  }
-  if (!form.route_id && product.default_route_id && isActiveRoute(product.default_route_id)) {
-    form.route_id = product.default_route_id
-  }
-}
-
-function addItem() {
-  form.items.push(blankItem())
-}
-
-function duplicateItem(item: OrderItemForm) {
-  form.items.push({ ...item, uid: newUid() })
-}
-
-function removeItem(index: number) {
-  form.items.splice(index, 1)
 }
 
 function addColorRow() {
   form.color_rows.push(blankColorRow())
+  syncDiaSeries()
 }
 
 function removeColorRow(index: number) {
@@ -837,10 +1452,34 @@ function buildValidItems() {
       specification: [form.plate_details.unit_l && `L ${form.plate_details.unit_l}`, form.plate_details.unit_w && `W ${form.plate_details.unit_w}`]
         .filter(Boolean)
         .join(' / '),
-      quantity: parseQuantity(form.plate_details.total_qty || ''),
-      route_id: form.route_id
+      quantity: parseQuantity(form.plate_details.total_qty || '')
     }
   ]
+}
+
+async function preparePlateNumberForSubmit() {
+  const orderType = form.plate_details.order_type || 'new_cylinder'
+  if (orderType === 'new_cylinder') {
+    if (!form.plate_details.reserved_plate_number_id) {
+      ElMessage.warning('请先申请并选择一个可用版号')
+      return false
+    }
+    applyReservedPlateNumber()
+    if (!form.plate_details.cylinder_id) {
+      ElMessage.warning('选择的版号不可用，请重新申请')
+      return false
+    }
+  } else if (orderType === 'old_cylinder' || orderType === 'rework') {
+    if (!currentDerivedSourcePlateNo()) {
+      ElMessage.warning('请先填写原版号')
+      return false
+    }
+    if (!form.plate_details.cylinder_id) {
+      const ready = await loadDerivedPlatePreview()
+      if (!ready) return false
+    }
+  }
+  return true
 }
 
 async function createOrder() {
@@ -849,20 +1488,43 @@ async function createOrder() {
     ElMessage.warning('请填写客户、交期，并至少保留一条有效产品明细')
     return
   }
-  if (!isActiveRoute(form.route_id) || validItems.some((item) => !isActiveRoute(item.route_id))) {
-    ElMessage.warning('订单工艺路线必须是启用状态')
+  const materialUseQuantity = Number(customerMaterialUseQty.value || 0)
+  if (selectedCustomerMaterialLotId.value && materialUseQuantity <= 0) {
+    ElMessage.warning('Please enter customer material use quantity')
     return
   }
+  if (selectedCustomerMaterial.value && materialUseQuantity > selectedCustomerMaterial.value.quantity_on_hand) {
+    ElMessage.warning('Customer material quantity is not enough')
+    return
+  }
+  const customerMaterialUses =
+    selectedCustomerMaterialLotId.value && materialUseQuantity > 0
+      ? [
+          {
+            lot_id: selectedCustomerMaterialLotId.value,
+            quantity: materialUseQuantity,
+            remark: 'Used by sales order'
+          }
+        ]
+      : []
+  const plateNumberReady = await preparePlateNumberForSubmit()
+  if (!plateNumberReady) return
+  syncCValue()
+  syncDiaSeries()
+  syncEntrustAliases()
+  syncColorDefaults()
+  stampOrderSubmitTime()
   saving.value = true
   try {
     const { data } = await apiClient.post<SalesOrder>('/sales-orders', {
       customer_id: form.customer_id,
       due_date: form.due_date,
-      route_id: form.route_id || null,
+      route_id: null,
       priority: form.priority,
-      remark: form.remark,
+      remark: form.plate_details.common_remarks || form.remark,
       plate_details: cleanObject(form.plate_details),
       color_rows: cleanColorRows(),
+      customer_material_uses: customerMaterialUses,
       items: validItems.map((item) => ({
         product_id: item.product_id || null,
         product_name: item.product_name,
@@ -870,15 +1532,16 @@ async function createOrder() {
         quantity: item.quantity,
         unit: item.unit || '件',
         unit_price: item.unit_price,
-        route_id: item.route_id || form.route_id || null,
+        route_id: null,
         remark: item.remark || null
       }))
     })
-    ElMessage.success('订单草稿已创建')
+    ElMessage.success('委托书草稿已创建')
     drawerVisible.value = false
     statusFilter.value = ''
+    await loadPlateNumbers()
     await loadOrders()
-    router.push(`/orders/${data.id}`)
+    router.push(`/orders/${data.id}/entrust`)
   } catch (error) {
     ElMessage.error(errorMessage(error))
   } finally {
@@ -907,6 +1570,7 @@ async function exportOrders() {
   try {
     const response = await apiClient.get('/sales-orders/export', {
       params: {
+        keyword: keyword.value || undefined,
         status_filter: statusFilter.value || undefined,
         order_type: orderTypeFilter.value || undefined,
         include_history: statusFilter.value ? historyStatuses.has(statusFilter.value) : false
@@ -953,29 +1617,126 @@ function printProductionOrder(row: SalesOrder) {
   openPrintable(`/plate-orders/${row.id}/production-order`)
 }
 
-watch([statusFilter, orderTypeFilter], loadOrders)
+watch([keyword, statusFilter, orderTypeFilter], loadOrders)
+watch(() => [form.plate_details.unit_l, form.plate_details.straight], syncCValue)
+watch(() => [form.plate_details.dia, form.plate_details.increase, form.color_rows.length], syncDiaSeries)
 onMounted(() => {
   resetForm()
   loadOrders()
   loadOptions()
+  loadPlateNumbers()
 })
 </script>
 
 <style scoped>
 .order-form {
   display: grid;
-  gap: 16px;
+  gap: 6px;
+}
+
+:global(.order-create-drawer .el-drawer__header) {
+  margin-bottom: 8px;
+  padding: 14px 18px 8px;
+}
+
+:global(.order-create-drawer .el-drawer__body) {
+  padding: 8px 18px 14px;
+}
+
+.order-form :deep(.el-form-item) {
+  margin-bottom: 6px;
+}
+
+.order-form :deep(.el-form-item__label) {
+  min-height: 18px;
+  margin-bottom: 2px;
+  padding-bottom: 0;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.order-form :deep(.el-input__wrapper),
+.order-form :deep(.el-select__wrapper),
+.order-form :deep(.el-date-editor.el-input__wrapper),
+.order-form :deep(.el-input-number) {
+  min-height: 26px;
+}
+
+.order-form :deep(.el-input__inner) {
+  height: 24px;
+  font-size: 12px;
 }
 
 .order-tabs {
   --el-border-radius-base: 6px;
 }
 
+.order-tabs :deep(.el-tabs__header) {
+  margin-bottom: 8px;
+}
+
+.order-tabs :deep(.el-tabs__item) {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.order-form .form-grid {
+  grid-template-columns: minmax(190px, 1.3fr) minmax(170px, 1fr) minmax(130px, 0.8fr) minmax(110px, 0.7fr) minmax(150px, 1fr) minmax(150px, 1fr);
+  gap: 5px 8px;
+}
+
 .field-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(180px, 1fr));
-  gap: 12px 14px;
+  grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
+  gap: 5px 8px;
   align-items: start;
+}
+
+.quick-order-panel {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 8px;
+  border: 1px solid #dbe5ef;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.plate-number-panel {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 8px;
+  border: 1px solid #cfdcf0;
+  border-radius: 6px;
+  background: #f9fbff;
+}
+
+.plate-number-grid {
+  display: grid;
+  grid-template-columns: minmax(136px, 0.8fr) minmax(104px, 0.55fr) minmax(136px, 0.65fr) minmax(220px, 1.3fr) minmax(138px, 0.7fr);
+  gap: 5px 8px;
+  align-items: start;
+}
+
+.derived-plate-grid {
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 0.8fr) minmax(180px, 1fr) minmax(150px, 0.7fr);
+}
+
+.plate-number-select {
+  min-width: 220px;
+}
+
+.quick-order-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.3fr) repeat(5, minmax(104px, 1fr));
+  gap: 5px 8px;
+  align-items: start;
+}
+
+.full-number {
+  width: 100%;
 }
 
 .wide-field {
@@ -987,8 +1748,8 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .table-tools > span {
@@ -998,7 +1759,34 @@ onMounted(() => {
 
 .dense-table :deep(.el-input__wrapper),
 .dense-table :deep(.el-select__wrapper) {
-  min-height: 30px;
+  min-height: 26px;
+}
+
+.dense-table :deep(.el-input__inner) {
+  height: 24px;
+  font-size: 12px;
+}
+
+.dense-table :deep(.cell) {
+  padding-inline: 6px;
+}
+
+.order-no-link {
+  height: auto;
+  padding: 0;
+  font-weight: 700;
+}
+
+.order-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.order-row-actions :deep(.el-button) {
+  margin-left: 0;
+  padding-inline: 2px;
 }
 
 .drawer-actions {
@@ -1007,7 +1795,46 @@ onMounted(() => {
 }
 
 .material-alert {
-  margin-bottom: 14px;
+  margin-bottom: 8px;
+}
+
+.material-use-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.5fr) minmax(160px, 0.8fr) minmax(120px, 0.6fr);
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.order-search {
+  min-width: 260px;
+}
+
+.customer-price-alert {
+  margin-bottom: 8px;
+}
+
+.customer-price-alert :deep(.el-alert__title) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.customer-price-hint {
+  font-weight: 700;
+}
+
+.customer-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}
+
+.customer-option small {
+  color: #667085;
+  font-size: 12px;
 }
 
 .material-pill {
@@ -1017,13 +1844,21 @@ onMounted(() => {
 }
 
 @media (max-width: 1180px) {
-  .field-grid {
+  .field-grid,
+  .quick-order-grid,
+  .material-use-grid,
+  .plate-number-grid,
+  .derived-plate-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 720px) {
-  .field-grid {
+  .field-grid,
+  .quick-order-grid,
+  .material-use-grid,
+  .plate-number-grid,
+  .derived-plate-grid {
     grid-template-columns: 1fr;
   }
 

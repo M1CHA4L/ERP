@@ -125,6 +125,10 @@ class CustomerStatementRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     received_amount: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
     due_amount: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
     status: Mapped[str] = mapped_column(String(32), default="draft")
+    price_approval_status: Mapped[str] = mapped_column(String(32), default="pending", server_default="pending")
+    price_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    price_approved_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    price_approval_remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     printed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 

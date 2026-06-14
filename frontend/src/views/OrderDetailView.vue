@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <section class="page-stack">
     <div class="toolbar">
       <div class="toolbar-left">
@@ -10,12 +10,11 @@
       <div class="toolbar-left">
         <el-button :icon="Refresh" :loading="loading" @click="reloadAll">刷新</el-button>
         <el-button v-if="order" :icon="Printer" @click="goEntrust">查看委托书</el-button>
-        <el-button v-if="order" :icon="Printer" @click="printProductionOrder">生产通知单</el-button>
+        <el-button v-if="order" :icon="Printer" @click="printProductionOrder">生产单</el-button>
         <el-button v-if="order && canEditEngraving" :icon="Edit" @click="openEngravingDialog">电雕录入</el-button>
         <el-button
           v-if="canConfirmOrder"
           type="primary"
-          :disabled="!selectedRouteId"
           :loading="confirming"
           @click="confirmOrder"
         >
@@ -45,7 +44,7 @@
             <div>
               <span class="muted-label">产品摘要</span>
               <h3>{{ order.product_summary }}</h3>
-              <p>{{ customerName }} · {{ order.items.length }} 项明细 · {{ routeName }}</p>
+              <p>{{ customerName }} · {{ order.items.length }} 项明细</p>
             </div>
             <div class="order-metrics">
               <div>
@@ -82,7 +81,6 @@
               <el-button
                 v-if="canConfirmOrder"
                 type="primary"
-                :disabled="!selectedRouteId"
                 :loading="confirming"
                 @click="confirmOrder"
               >
@@ -98,7 +96,7 @@
               </el-button>
               <el-button v-if="canViewWorkOrders && workOrders.length" @click="router.push('/work-orders')">查看生产</el-button>
               <el-button v-if="canViewDelivery" @click="router.push('/deliveries')">查看送货</el-button>
-              <el-button v-if="canViewFinance" @click="router.push('/finance')">查看应收</el-button>
+              <el-button v-if="canUseFinanceModule" @click="router.push('/finance')">查看应收</el-button>
             </div>
           </div>
         </el-card>
@@ -154,18 +152,6 @@
             </div>
           </template>
           <div class="detail-grid control-detail-grid">
-            <div>
-              <span>工艺路线</span>
-              <el-select
-                v-if="canViewRoutes"
-                v-model="selectedRouteId"
-                :disabled="!canChangeRoute"
-                placeholder="选择路线"
-              >
-                <el-option v-for="routeItem in activeRoutes" :key="routeItem.id" :label="routeItem.name" :value="routeItem.id" />
-              </el-select>
-              <strong v-else>{{ routeName }}</strong>
-            </div>
             <div><span>工单数量</span><strong>{{ workOrders.length }}</strong></div>
             <div><span>工序总数</span><strong>{{ totalStepCount }}</strong></div>
             <div><span>已完成工序</span><strong>{{ finishedStepCount }}</strong></div>
@@ -272,6 +258,27 @@
       </el-card>
 
       <div class="related-grid">
+        <el-card v-if="materialUses.length || isSelfBringOrder" shadow="never" class="table-card">
+          <template #header>
+            <div class="panel-title">
+              <span>Customer Material Used</span>
+              <el-tag>{{ materialUses.length }} batch</el-tag>
+            </div>
+          </template>
+          <el-table :data="materialUses" empty-text="No customer material used" max-height="300">
+            <el-table-column prop="lot_no" label="Lot" min-width="150" />
+            <el-table-column prop="product_name" label="Product" min-width="150" />
+            <el-table-column prop="specification" label="Spec" min-width="130" />
+            <el-table-column label="Used Qty" width="120">
+              <template #default="{ row }">{{ row.quantity_used }} {{ row.unit }}</template>
+            </el-table-column>
+            <el-table-column prop="warehouse_name" label="Warehouse" min-width="140" />
+            <el-table-column prop="movement_date" label="Date" width="120" />
+            <el-table-column prop="cylinder_no" label="Cylinder" min-width="130" />
+            <el-table-column prop="remark" label="Remark" min-width="160" />
+          </el-table>
+        </el-card>
+
         <el-card v-if="canViewInspections" shadow="never" class="table-card">
           <template #header>
             <div class="panel-title">
@@ -500,7 +507,6 @@ import type {
   EngravingRecord,
   InspectionRecord,
   PageResponse,
-  ProcessRoute,
   Receivable,
   SalesOrder,
   TimelineItem,
@@ -515,8 +521,6 @@ const route = useRoute()
 const router = useRouter()
 const order = ref<SalesOrder | null>(null)
 const customer = ref<Customer | null>(null)
-const routes = ref<ProcessRoute[]>([])
-const selectedRouteId = ref('')
 const confirming = ref(false)
 const generating = ref(false)
 const loading = ref(false)
@@ -525,6 +529,7 @@ const deliveries = ref<DeliveryOrder[]>([])
 const receivables = ref<Receivable[]>([])
 const costRecords = ref<CostRecord[]>([])
 const inspections = ref<InspectionRecord[]>([])
+const materialUses = ref<SalesOrderMaterialUse[]>([])
 const timeline = ref<TimelineItem[]>([])
 const timelineLoading = ref(false)
 const engravingVisible = ref(false)
@@ -534,36 +539,53 @@ interface EngravingRowForm extends EngravingColorRow {
   uid: string
 }
 
+interface SalesOrderMaterialUse {
+  movement_no: string
+  lot_id?: string
+  lot_no?: string
+  product_name: string
+  specification?: string
+  quantity_used: number
+  unit: string
+  warehouse_name: string
+  movement_date: string
+  cylinder_no?: string
+  remark?: string
+  status: string
+}
+
 const engravingForm = ref<EngravingRecord & { rows: EngravingRowForm[] }>({
   rows: []
 })
 
 const finishedStepStatuses = new Set(['completed', 'inspection_passed', 'skipped'])
-const activeRoutes = computed(() => routes.value.filter((item) => item.status === 'active'))
 const canConfirmOrder = computed(() => Boolean(order.value && order.value.status === 'draft' && canUse('order:confirm', roleGroups.orderOperators)))
 const canGenerateWorkOrders = computed(() =>
   Boolean(order.value && order.value.status === 'confirmed' && canUse('work_order:create', roleGroups.productionOperators))
 )
-const canChangeRoute = computed(() => Boolean(order.value?.status === 'draft' && canUse('order:update', roleGroups.orderOperators)))
 const canManageOrderFiles = computed(() => canUse('order:update', roleGroups.orderOperators))
 const canViewWorkOrders = computed(() => hasPermission('work_order:view'))
-const canViewRoutes = computed(() => hasPermission('route:view'))
 const canViewDelivery = computed(() => hasPermission('delivery:view'))
 const canViewFinance = computed(() => hasPermission('finance:receivable:view'))
+const canUseFinanceModule = computed(() => canUse('finance:receivable:view', roleGroups.financeOperators))
 const canViewCosts = computed(() => hasPermission('cost:view'))
 const canViewInspections = computed(() => hasPermission('inspection:view'))
 const canEditEngraving = computed(() => hasPermission('step:report'))
 const orderFilePermission = computed(() => (canManageOrderFiles.value ? 'order:update' : '__order_file_readonly__'))
 const plateDetails = computed(() => order.value?.plate_details || {})
+const isSelfBringOrder = computed(() => {
+  const materialMode = String(plateDetails.value.new_material || plateDetails.value.material || plateDetails.value.material_new || '')
+  return materialMode === 'self-bring'
+})
 const engravingRecord = computed(() => plateDetails.value.engraving_record as EngravingRecord | undefined)
 const orderTypeLabel = computed(() => {
   const labels: Record<string, string> = {
-    new_cylinder: '新版下单',
-    old_cylinder: '旧版/加做',
-    dechrome: '退镀下单',
-    rework: '返工表'
+    new_cylinder: 'New Cylinder',
+    old_cylinder: 'Revision / Remake',
+    dechrome: 'Dechrome (Chargeable / Free)',
+    rework: 'Rework (Chargeable / Free)'
   }
-  return labels[String(plateDetails.value.order_type || 'new_cylinder')] || '新版下单'
+  return labels[String(plateDetails.value.order_type || 'new_cylinder')] || 'New Cylinder'
 })
 const commandMetricLabel = computed(() => {
   if (canViewCosts.value) return '毛利'
@@ -577,11 +599,6 @@ const commandMetricValue = computed(() => {
 })
 
 const customerName = computed(() => customer.value?.name || (order.value ? `客户 ${order.value.customer_id}` : '-'))
-const routeName = computed(() => {
-  const routeId = selectedRouteId.value || order.value?.route_id
-  if (routeId && !hasPermission('route:view')) return '已选择路线'
-  return routes.value.find((item) => item.id === routeId)?.name || '未选择路线'
-})
 const totalStepCount = computed(() => workOrders.value.reduce((sum, item) => sum + item.steps.length, 0))
 const finishedStepCount = computed(() =>
   workOrders.value.reduce((sum, item) => sum + item.steps.filter((step) => finishedStepStatuses.has(step.status)).length, 0)
@@ -659,10 +676,10 @@ const controlStages = computed(() => {
 const nextAction = computed(() => {
   const status = order.value?.status
   if (status === 'draft') {
-    return { title: '等待确认订单', description: '选择工艺路线后确认订单，确认后才能生成生产工单。' }
+    return { title: '等待确认订单', description: '确认订单资料后即可进入生产工单生成。' }
   }
   if (status === 'confirmed') {
-    return { title: '等待生成工单', description: '按订单明细和工艺路线生成工单，之后进入工序派工。' }
+    return { title: '等待生成工单', description: '按订单明细生成工单，之后进入工序派工。' }
   }
   if (['in_production', 'reworking', 'pending_inspection'].includes(status || '')) {
     return { title: '生产与质检推进中', description: '关注当前卡点、待检任务和返工异常，保证工序按顺序流转。' }
@@ -817,7 +834,6 @@ async function saveEngravingRecord() {
 async function loadOrder() {
   const { data } = await apiClient.get<SalesOrder>(`/sales-orders/${route.params.id}`)
   order.value = data
-  selectedRouteId.value = data.route_id || ''
 }
 
 async function loadTimeline() {
@@ -828,15 +844,6 @@ async function loadTimeline() {
   } finally {
     timelineLoading.value = false
   }
-}
-
-async function loadRoutes() {
-  if (!hasPermission('route:view')) {
-    routes.value = []
-    return
-  }
-  const { data } = await apiClient.get<ProcessRoute[]>('/process-routes')
-  routes.value = data
 }
 
 async function loadCustomer() {
@@ -894,6 +901,11 @@ async function loadRelated() {
         })
     )
   }
+  requests.push(
+    apiClient.get<SalesOrderMaterialUse[]>(`/sales-orders/${orderId}/material-uses`).then(({ data }) => {
+      materialUses.value = data
+    })
+  )
   await Promise.allSettled(requests)
 }
 
@@ -906,7 +918,8 @@ async function reloadAll() {
     receivables.value = []
     costRecords.value = []
     inspections.value = []
-    await Promise.all([loadRoutes(), loadOrder(), loadTimeline()])
+    materialUses.value = []
+    await Promise.all([loadOrder(), loadTimeline()])
     await Promise.all([loadCustomer(), loadRelated()])
   } catch (error) {
     ElMessage.error(errorMessage(error))
@@ -917,14 +930,10 @@ async function reloadAll() {
 
 async function confirmOrder() {
   if (!order.value) return
-  if (!selectedRouteId.value) {
-    ElMessage.warning('请先选择工艺路线')
-    return
-  }
   confirming.value = true
   try {
     const { data } = await apiClient.post<SalesOrder>(`/sales-orders/${order.value.id}/confirm`, {
-      route_id: selectedRouteId.value
+      route_id: null
     })
     order.value = data
     ElMessage.success('订单已确认，可以生成工单')
@@ -941,7 +950,7 @@ async function generateWorkOrders() {
   generating.value = true
   try {
     const { data } = await apiClient.post<WorkOrder[]>(`/sales-orders/${order.value.id}/work-orders`, {
-      route_id: selectedRouteId.value || order.value.route_id
+      route_id: null
     })
     workOrders.value = data
     await Promise.all([loadOrder(), loadTimeline(), loadRelated()])

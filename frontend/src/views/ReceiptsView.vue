@@ -9,7 +9,7 @@
         <el-button :icon="Refresh" @click="loadAll">刷新</el-button>
       </div>
       <div class="toolbar-left">
-        <el-button type="primary" :icon="Plus" v-permission="'finance:payment:create'" @click="receiptVisible = true">登记日收入</el-button>
+        <el-button type="primary" :icon="Plus" v-permission="'finance:payment:create'" @click="openReceiptDialog">登记日收入</el-button>
         <el-button type="success" :icon="Calendar" v-permission="'finance:month_close'" @click="closeMonth">月末汇总</el-button>
         <el-button :icon="Download" v-permission="'report:export'" @click="exportDailyReceipts">导出日收入</el-button>
         <el-button :icon="Download" v-permission="'report:export'" @click="exportMonthlyReceipts">导出版号月结</el-button>
@@ -36,8 +36,14 @@
           <el-form-item label="勾选版号（逗号分隔）">
             <el-input v-model="statementForm.cylinder_nos" placeholder="S26052340, S26052353" />
           </el-form-item>
-          <el-button type="primary" :loading="creatingStatement" @click="createStatement">生成客户账单</el-button>
-          <el-button v-if="lastStatement" text type="primary" @click="printStatement(lastStatement.id)">打印 {{ lastStatement.statement_no }}</el-button>
+          <el-button type="primary" :loading="creatingStatement" v-permission="'finance:month_close'" @click="createStatement">生成客户账单</el-button>
+          <el-button v-if="lastStatement && lastStatement.price_approval_status !== 'approved'" text type="success" v-permission="'finance:bill_price:approve'" @click="approveStatementPrice(lastStatement)">审核价格</el-button>
+          <el-button v-if="lastStatement" text type="primary" :disabled="lastStatement.price_approval_status !== 'approved'" v-permission="'finance:receipt:print'" @click="printStatement(lastStatement.id, true)">
+            带抬头打印 {{ lastStatement.statement_no }}
+          </el-button>
+          <el-button v-if="lastStatement" text :disabled="lastStatement.price_approval_status !== 'approved'" v-permission="'finance:receipt:print'" @click="printStatement(lastStatement.id, false)">
+            无抬头打印
+          </el-button>
         </el-form>
       </el-card>
 
@@ -64,29 +70,29 @@
         </div>
       </template>
       <el-table :data="receipts" stripe>
-        <el-table-column prop="receipt_no" label="收据号" min-width="150" />
-        <el-table-column label="客户" min-width="180">
+        <el-table-column prop="receipt_no" label="Receipt No." min-width="150" />
+        <el-table-column label="Customer" min-width="180">
           <template #default="{ row }">{{ customerName(row.customer_id) }}</template>
         </el-table-column>
-        <el-table-column prop="received_date" label="收款日期" width="120" />
-        <el-table-column prop="payment_method" label="方式" width="110" />
-        <el-table-column prop="total_amount" label="合计" width="120">
+        <el-table-column prop="received_date" label="Received Date" width="130" />
+        <el-table-column prop="payment_method" label="Payment Method" width="150" />
+        <el-table-column prop="cash_amount" label="Cash Amount" width="130">
+          <template #default="{ row }">{{ formatCurrency(row.cash_amount) }}</template>
+        </el-table-column>
+        <el-table-column prop="bank_amount" label="Bank Amount" width="130">
+          <template #default="{ row }">{{ formatCurrency(row.bank_amount) }}</template>
+        </el-table-column>
+        <el-table-column prop="other_amount" label="Other Amount" width="130">
+          <template #default="{ row }">{{ formatCurrency(row.other_amount) }}</template>
+        </el-table-column>
+        <el-table-column prop="salesman_name" label="Salesman" width="120" />
+        <el-table-column label="VAT" width="90"> <template #default>0</template> </el-table-column>
+        <el-table-column label="AIT" width="90"> <template #default>0</template> </el-table-column>
+        <el-table-column label="Total Tax" width="110"> <template #default>0</template> </el-table-column>
+        <el-table-column prop="total_amount" label="Total Amount" width="130">
           <template #default="{ row }">{{ formatCurrency(row.total_amount) }}</template>
         </el-table-column>
-        <el-table-column label="版号分摊" min-width="220">
-          <template #default="{ row }">
-            <div class="tag-list">
-              <el-tag v-for="allocation in row.allocations" :key="allocation.id" effect="plain">
-                {{ allocation.cylinder_no }} · {{ formatCurrency(allocation.amount) }}
-              </el-tag>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.status === 'checked' ? 'success' : 'warning'">{{ row.status === 'checked' ? '已审核' : '待审核' }}</el-tag>
-          </template>
-        </el-table-column>
+        <el-table-column prop="remark" label="Remark" min-width="180" show-overflow-tooltip />
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button v-if="row.status !== 'checked'" text type="primary" @click="checkReceipt(row)">审核</el-button>
@@ -122,6 +128,46 @@
       </el-table>
     </el-card>
 
+    <el-card shadow="never" class="table-card">
+      <template #header>
+        <div class="panel-title">
+          <span>客户账单</span>
+          <el-tag>{{ statements.length }} 条</el-tag>
+        </div>
+      </template>
+      <el-table :data="statements" stripe>
+        <el-table-column prop="statement_no" label="Bill No." min-width="150" />
+        <el-table-column prop="statement_month" label="月份" width="120" />
+        <el-table-column label="客户" min-width="180">
+          <template #default="{ row }">{{ customerName(row.customer_id) }}</template>
+        </el-table-column>
+        <el-table-column prop="current_receivable" label="金额" width="130">
+          <template #default="{ row }">{{ formatWholeCurrency(row.current_receivable) }}</template>
+        </el-table-column>
+        <el-table-column label="VAT 15%" width="130">
+          <template #default="{ row }">{{ formatCurrency(statementVat(row)) }}</template>
+        </el-table-column>
+        <el-table-column label="含税应收" width="140">
+          <template #default="{ row }">{{ formatCurrency(statementTotalWithVat(row)) }}</template>
+        </el-table-column>
+        <el-table-column label="价格审核" width="130">
+          <template #default="{ row }">
+            <el-tag :type="row.price_approval_status === 'approved' ? 'success' : 'warning'">
+              {{ statementApprovalLabel(row.price_approval_status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="printed_at" label="打印时间" min-width="160" show-overflow-tooltip />
+        <el-table-column label="操作" width="280" fixed="right">
+          <template #default="{ row }">
+            <el-button v-if="row.price_approval_status !== 'approved'" text type="success" v-permission="'finance:bill_price:approve'" @click="approveStatementPrice(row)">审核价格</el-button>
+            <el-button text type="primary" :disabled="row.price_approval_status !== 'approved'" v-permission="'finance:receipt:print'" @click="printStatement(row.id, true)">带抬头</el-button>
+            <el-button text :disabled="row.price_approval_status !== 'approved'" v-permission="'finance:receipt:print'" @click="printStatement(row.id, false)">无抬头</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <el-dialog v-model="receiptVisible" title="登记日收入" width="860px">
       <el-form :model="receiptForm" label-position="top">
         <div class="form-grid">
@@ -138,6 +184,7 @@
               <el-option label="现金" value="cash" />
               <el-option label="银行" value="bank" />
               <el-option label="支票" value="check" />
+              <el-option label="银行支票" value="bank_check" />
               <el-option label="其他" value="other" />
             </el-select>
           </el-form-item>
@@ -161,8 +208,14 @@
           <el-input v-model="receiptForm.abstract" placeholder="例如 May 2026 / April 2026" />
         </el-form-item>
         <div class="table-tools">
-          <span>分摊到版号，分摊合计必须等于收款总额 {{ formatCurrency(receiptFormTotal) }}</span>
-          <el-button :icon="Plus" @click="addAllocation">添加版号</el-button>
+          <span>
+            收款总额 {{ formatCurrency(receiptFormTotal) }} / 分摊合计 {{ formatCurrency(allocationTotal) }}
+            <el-tag v-if="allocationDiff !== 0" size="small" type="warning" effect="plain">差额 {{ formatCurrency(allocationDiff) }}</el-tag>
+          </span>
+          <div class="table-actions">
+            <el-button :disabled="allocationDiff === 0" @click="fillAllocationBalance">补齐差额</el-button>
+            <el-button :icon="Plus" @click="addAllocation">添加版号</el-button>
+          </div>
         </div>
         <el-table :data="receiptForm.allocations">
           <el-table-column label="版号" min-width="180">
@@ -201,6 +254,7 @@ import { formatCurrency } from '../utils/format'
 const customers = ref<Customer[]>([])
 const receipts = ref<ReceiptDailyEntry[]>([])
 const monthly = ref<MonthlyPaymentSummary[]>([])
+const statements = ref<CustomerStatementRun[]>([])
 const customerFilter = ref('')
 const cylinderFilter = ref('')
 const receiptVisible = ref(false)
@@ -232,6 +286,8 @@ const cashTotal = computed(() => receipts.value.reduce((sum, item) => sum + Numb
 const bankTotal = computed(() => receipts.value.reduce((sum, item) => sum + Number(item.bank_amount || 0), 0))
 const otherTotal = computed(() => receipts.value.reduce((sum, item) => sum + Number(item.other_amount || 0), 0))
 const receiptFormTotal = computed(() => Number(receiptForm.cash_amount || 0) + Number(receiptForm.bank_amount || 0) + Number(receiptForm.other_amount || 0))
+const allocationTotal = computed(() => receiptForm.allocations.reduce((sum, item) => sum + Number(item.amount || 0), 0))
+const allocationDiff = computed(() => Number((receiptFormTotal.value - allocationTotal.value).toFixed(2)))
 
 function errorMessage(error: unknown) {
   return (error as { response?: { data?: { detail?: string } } }).response?.data?.detail || '操作失败'
@@ -241,9 +297,41 @@ function customerName(customerId: string) {
   return customers.value.find((customer) => customer.id === customerId)?.name || customerId
 }
 
+function formatWholeCurrency(value: number | string | null | undefined) {
+  return `Tk ${Math.round(Number(value || 0)).toLocaleString()}`
+}
+
+function statementVat(statement: CustomerStatementRun) {
+  return Number((Number(statement.current_receivable || 0) * 0.15).toFixed(2))
+}
+
+function statementTotalWithVat(statement: CustomerStatementRun) {
+  return Number((Number(statement.current_receivable || 0) + statementVat(statement)).toFixed(2))
+}
+
+function statementApprovalLabel(status: string) {
+  if (status === 'approved') return '已审核'
+  if (status === 'rejected') return '已驳回'
+  return '待老板审核'
+}
+
+async function fetchAllPages<T>(path: string, params: Record<string, string | number | boolean | undefined> = {}) {
+  const items: T[] = []
+  let page = 1
+  const pageSize = 100
+  while (true) {
+    const { data } = await apiClient.get<PageResponse<T>>(path, {
+      params: { ...params, page, page_size: pageSize }
+    })
+    items.push(...data.items)
+    if (items.length >= data.total || data.items.length < pageSize) break
+    page += 1
+  }
+  return items
+}
+
 async function loadCustomers() {
-  const { data } = await apiClient.get<PageResponse<Customer>>('/customers', { params: { page_size: 100 } })
-  customers.value = data.items
+  customers.value = await fetchAllPages<Customer>('/customers')
 }
 
 async function loadReceipts() {
@@ -268,8 +356,19 @@ async function loadMonthly() {
   monthly.value = data.items
 }
 
+async function loadStatements() {
+  const { data } = await apiClient.get<PageResponse<CustomerStatementRun>>('/finance/customer-statements', {
+    params: {
+      customer_id: statementForm.customer_id || customerFilter.value || undefined,
+      statement_month: monthCloseDate.value,
+      page_size: 50
+    }
+  })
+  statements.value = data.items
+}
+
 async function loadAll() {
-  await Promise.all([loadReceipts(), loadMonthly()])
+  await Promise.all([loadReceipts(), loadMonthly(), loadStatements()])
 }
 
 function addAllocation() {
@@ -278,6 +377,11 @@ function addAllocation() {
 
 function removeAllocation(index: number) {
   receiptForm.allocations.splice(index, 1)
+}
+
+function openReceiptDialog() {
+  resetReceiptForm()
+  receiptVisible.value = true
 }
 
 function resetReceiptForm() {
@@ -295,6 +399,12 @@ function resetReceiptForm() {
   })
 }
 
+function fillAllocationBalance() {
+  if (!receiptForm.allocations.length) addAllocation()
+  const target = [...receiptForm.allocations].reverse().find((item) => item.cylinder_no) || receiptForm.allocations[receiptForm.allocations.length - 1]
+  target.amount = Number((Number(target.amount || 0) + allocationDiff.value).toFixed(2))
+}
+
 async function saveReceipt() {
   if (!receiptForm.customer_id || receiptFormTotal.value <= 0) {
     ElMessage.warning('请选择客户并填写收款金额')
@@ -303,6 +413,10 @@ async function saveReceipt() {
   const allocations = receiptForm.allocations.filter((item) => item.cylinder_no && item.amount > 0)
   if (!allocations.length) {
     ElMessage.warning('请至少分摊到一个版号')
+    return
+  }
+  if (allocationDiff.value !== 0) {
+    ElMessage.warning('分摊合计必须等于收款总额')
     return
   }
   savingReceipt.value = true
@@ -357,10 +471,22 @@ async function createStatement() {
     })
     lastStatement.value = data
     ElMessage.success('客户账单已生成')
+    await loadStatements()
   } catch (error) {
     ElMessage.error(errorMessage(error))
   } finally {
     creatingStatement.value = false
+  }
+}
+
+async function approveStatementPrice(statement: CustomerStatementRun) {
+  try {
+    const { data } = await apiClient.post<CustomerStatementRun>(`/finance/customer-statements/${statement.id}/approve-price`)
+    if (lastStatement.value?.id === statement.id) lastStatement.value = data
+    ElMessage.success('Bill 价格已审核')
+    await loadStatements()
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
   }
 }
 
@@ -417,11 +543,11 @@ function printReceipt(id: string) {
   openPrintable(`/finance/receipts/daily/${id}/print`)
 }
 
-function printStatement(id: string) {
-  openPrintable(`/finance/customer-statements/${id}/print`)
+function printStatement(id: string, withHeader = true) {
+  openPrintable(`/finance/customer-statements/${id}/print?with_header=${withHeader ? 'true' : 'false'}`)
 }
 
-watch([customerFilter, cylinderFilter], loadAll)
+watch([customerFilter, cylinderFilter, monthCloseDate, () => statementForm.customer_id], loadAll)
 onMounted(async () => {
   await loadCustomers()
   await loadAll()
@@ -460,5 +586,11 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

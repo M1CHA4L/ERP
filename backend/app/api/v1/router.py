@@ -12,12 +12,14 @@ from app.api.v1.endpoints import (
     inventory,
     operation_logs,
     maintenance,
+    plate_numbers,
     plate_orders,
     print_jobs,
     process_routes,
     products,
     sales_orders,
     users,
+    workflow_v2,
     work_orders,
 )
 
@@ -28,8 +30,10 @@ api_router.include_router(customers.router, prefix="/customers", tags=["customer
 api_router.include_router(products.router, prefix="/products", tags=["products"])
 api_router.include_router(process_routes.router, prefix="/process-routes", tags=["process routes"])
 api_router.include_router(sales_orders.router, prefix="/sales-orders", tags=["sales orders"])
+api_router.include_router(plate_numbers.router, prefix="/plate-numbers", tags=["plate numbers"])
 api_router.include_router(plate_orders.router, prefix="/plate-orders", tags=["plate orders"])
 api_router.include_router(work_orders.router, prefix="/work-orders", tags=["work orders"])
+api_router.include_router(workflow_v2.router, prefix="/workflow-v2", tags=["workflow v2"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(inspections.router, prefix="/inspections", tags=["inspections"])
 api_router.include_router(delivery_orders.router, prefix="/delivery-orders", tags=["delivery orders"])

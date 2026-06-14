@@ -2,6 +2,7 @@ export interface UserProfile {
   id: string
   username: string
   real_name: string
+  department?: string
   roles: string[]
   permissions: string[]
   device_mac_address?: string
@@ -35,6 +36,23 @@ export interface Customer {
   fax?: string
   address?: string
   payment_terms_days: number
+  payment_method?: string
+  minimum_price?: number
+  vat_enabled?: boolean
+  ait_enabled?: boolean
+  advance_percent?: number
+  lister?: string
+  price_rules?: Array<{
+    max_cm2?: number
+    min_cm2?: number
+    min_l?: number
+    max_l?: number
+    min_c?: number
+    max_c?: number
+    old_pcs?: number
+    repair_chromium_pcs?: number
+    special_cyl_price?: number
+  }>
   credit_limit?: number
   tax_no?: string
   office?: string
@@ -82,6 +100,8 @@ export interface PlateDetails {
   unit_w?: PlateValue
   crossway?: PlateValue
   order_date?: PlateValue
+  order_datetime?: PlateValue
+  order_time?: PlateValue
   dynamic_balance?: PlateValue
   slope?: PlateValue
   original_no?: PlateValue
@@ -97,6 +117,9 @@ export interface PlateDetails {
   no?: PlateValue
   sample_no?: PlateValue
   printings?: PlateValue
+  printing_material?: PlateValue
+  new_qty?: PlateValue
+  self_bring_qty?: PlateValue
   salesman?: PlateValue
   sign_in_person?: PlateValue
   c_value?: PlateValue
@@ -109,6 +132,9 @@ export interface PlateDetails {
   bag_type?: PlateValue
   material_new?: PlateValue
   set_type?: PlateValue
+  dia?: PlateValue
+  width?: PlateValue
+  hor_ver?: PlateValue
   mark_line?: PlateValue
   test_line?: PlateValue
   test_spot?: PlateValue
@@ -134,6 +160,10 @@ export interface PlateDetails {
   rework_target_step?: PlateValue
   rework_quantity?: PlateValue
   rework_chargeable?: PlateValue
+  reserved_plate_number_id?: PlateValue
+  plate_number_kind?: PlateValue
+  derivation_type?: PlateValue
+  derived_source_cylinder_no?: PlateValue
   entrust_layout?: EntrustLayoutSettings
   engraving_record?: EngravingRecord
   [key: string]: PlateValue | EngravingRecord | EntrustLayoutSettings | undefined
@@ -154,7 +184,46 @@ export interface EntrustLayoutSettings {
   bottom_note?: string
   width_label?: string
   custom_note?: string
-  [key: string]: string | number | boolean | undefined
+  left_mark?: string
+  empty_move?: string
+  left_detection?: string
+  left_empty?: string
+  empty_color_move?: string
+  layout_color?: string
+  left_color?: string
+  right_color?: string
+  left_broaden?: string
+  middle_broaden?: number
+  right_move?: string
+  right_mark?: string
+  right_empty_move?: string
+  right_detection?: string
+  right_empty?: string
+  right_broaden?: string
+  printing_width?: string | number
+  printing_margin?: string | number
+  continuity?: boolean
+  light_spot_horizontal?: number
+  light_spot_vertical?: number
+  light_spot_width?: number
+  pattern_1mm_label?: string
+  pattern_20mm_label?: string
+  light_spot_upper_left?: boolean
+  light_spot_upper_right?: boolean
+  light_spot_lower_left?: boolean
+  light_spot_lower_right?: boolean
+  left_mark_enabled?: boolean
+  right_mark_enabled?: boolean
+  left_detection_enabled?: boolean
+  right_detection_enabled?: boolean
+  exclusive_use?: boolean
+  mid_mark?: boolean
+  left_self_mark?: boolean
+  right_self_mark?: boolean
+  full_line?: boolean
+  full_line_width?: string | number
+  layout_items?: Array<Record<string, string | number | boolean>>
+  [key: string]: string | number | boolean | Array<Record<string, string | number | boolean>> | undefined
 }
 
 export interface ColorRow {
@@ -191,6 +260,22 @@ export interface SalesOrder {
   items: SalesOrderItem[]
 }
 
+export interface PlateNumberReservation {
+  id: string
+  plate_no: string
+  prefix: string
+  year_month: string
+  sequence_no: number
+  status: string
+  assigned_user_id?: string
+  used_order_id?: string
+  used_at?: string
+  returned_at?: string
+  note?: string
+  created_at: string
+  updated_at: string
+}
+
 export interface EntrustSheet {
   order: SalesOrder
   customer_name?: string
@@ -208,7 +293,7 @@ export interface Product {
   unit: string
   default_route_id?: string
   reference_price?: number
-  status: string
+  status?: string
   remark?: string
 }
 
@@ -315,6 +400,62 @@ export interface ProductionBoard {
   active_tasks: WorkOrderStepTask[]
 }
 
+export interface ProductionFlowRow {
+  work_order_id: string
+  sales_order_id: string
+  work_order_no: string
+  order_no: string
+  cylinder_no: string
+  salesman?: string
+  order_date: string
+  due_date: string
+  completed_date?: string
+  period?: string
+  customer_name: string
+  product_name: string
+  c_value?: string
+  l_value?: string
+  total_qty: number
+  new_base?: string
+  old_base?: string
+  production_position?: string
+  computer_position?: string
+  square?: string
+  dia?: string
+  hole?: string
+  slope?: string
+  keyway?: string
+  single_double?: string
+  order_status: string
+  work_order_status: string
+  current_step_status?: string
+  order_by?: string
+  sign_in_person?: string
+  printing_method?: string
+  unit_l?: string
+  unit_w?: string
+  straight?: string
+  increase?: string
+  flange?: string
+  cylinder_model?: string
+  cylinder_making?: string
+  material_model?: string
+  new_material?: string
+  placing_member?: string
+  color_numbers?: string
+  print_color?: string
+  real_dia?: string
+  customer_material_qty?: string
+  production_qty?: string
+  details: {
+    steps: Array<Record<string, string | number | boolean | null>>
+    process_records: Array<Record<string, string | number | boolean | null>>
+    inspections: Array<Record<string, string | number | boolean | null>>
+    reworks: Array<Record<string, string | number | boolean | null>>
+    requirements: Record<string, string | number | boolean | null>
+  }
+}
+
 export interface UserOption {
   id: string
   username: string
@@ -327,6 +468,10 @@ export interface UserOption {
   device_bound_at?: string
   last_login_at?: string
   roles: string[]
+  role_permissions?: string[]
+  extra_permissions?: string[]
+  disabled_permissions?: string[]
+  permissions?: string[]
 }
 
 export interface RoleOption {
@@ -334,6 +479,15 @@ export interface RoleOption {
   code: string
   name: string
   status: string
+  permissions?: string[]
+}
+
+export interface PermissionOption {
+  id: string
+  code: string
+  name: string
+  type: string
+  sort_no: number
 }
 
 export interface PendingInspectionTask {
@@ -404,6 +558,7 @@ export interface DeliveryOrder {
 export interface Receivable {
   id: string
   receivable_no: string
+  cylinder_no?: string
   sales_order_id?: string
   delivery_order_id?: string
   customer_id: string
@@ -484,6 +639,10 @@ export interface CustomerStatementRun {
   received_amount: number
   due_amount: number
   status: string
+  price_approval_status: string
+  price_approved_at?: string
+  price_approved_by?: string
+  price_approval_remark?: string
   printed_at?: string
   remark?: string
 }
@@ -654,6 +813,9 @@ export interface SalesMonthlySummary {
 
 export interface SalespersonMonthlyRow {
   salesperson: string
+  customer_id: string
+  customer_name: string
+  settlement_type: string
   new_pcs: number
   old_pcs: number
   total_amount: number
@@ -663,11 +825,12 @@ export interface CustomerMonthlySalesRow {
   salesperson: string
   customer_id: string
   customer_name: string
+  settlement_type: string
+  pcs: number
   new_pcs: number
   old_pcs: number
   total_amount: number
   price: number
-  settlement_type: string
 }
 
 export interface SalespersonMonthlyReport {
@@ -769,4 +932,222 @@ export interface MasterDataCleanup {
     created_at?: string
     updated_at?: string
   }>
+}
+
+export interface WorkflowTemplateNode {
+  id: string
+  node_code: string
+  node_name: string
+  department?: string
+  node_type: string
+  sort_order: number
+  branch_code?: string
+  is_parallel_node: boolean
+  is_join_node: boolean
+  is_required: boolean
+  allow_skip: boolean
+  required_permission?: string
+}
+
+export interface WorkflowTemplateEdge {
+  id: string
+  from_node_id: string
+  to_node_id: string
+  condition_type: string
+  condition_expression?: string
+}
+
+export interface WorkflowTemplate {
+  id: string
+  template_code: string
+  template_name: string
+  template_type: string
+  version: number
+  is_default: boolean
+  is_active: boolean
+  nodes: WorkflowTemplateNode[]
+  edges: WorkflowTemplateEdge[]
+}
+
+export interface WorkflowNode {
+  id: string
+  order_workflow_id: string
+  sales_order_id: string
+  node_id: string
+  node_code: string
+  node_name: string
+  department?: string
+  node_type: string
+  branch_code?: string
+  sort_order: number
+  status: string
+  assigned_user_id?: string
+  started_at?: string
+  completed_at?: string
+  waiting_reason?: string
+  is_current: boolean
+  remarks?: string
+}
+
+export interface WorkflowGraphEdge {
+  from_node_code: string
+  to_node_code: string
+  condition_type: string
+  condition_expression?: string
+}
+
+export interface WorkflowGraph {
+  workflow_id: string
+  sales_order_id: string
+  template_id: string
+  status: string
+  started_at: string
+  completed_at?: string
+  nodes: WorkflowNode[]
+  edges: WorkflowGraphEdge[]
+}
+
+export interface WorkflowJoinCheck {
+  ready: boolean
+  join_node_code: string
+  waiting_for: string[]
+  epin_completed: boolean
+  copper_grind_completed: boolean
+}
+
+export interface PreOrder {
+  id: string
+  pre_order_no: string
+  sample_no: string
+  customer_id?: string
+  customer_name: string
+  product_name: string
+  type?: string
+  order_time: string
+  salesperson_id?: string
+  num: number
+  receiver_id?: string
+  print_color?: string
+  remarks?: string
+  status: string
+  customer_confirmed_at?: string
+  converted_order_id?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface PreOrderCreatePayload {
+  sample_no: string
+  customer_id?: string
+  customer_name: string
+  product_name: string
+  type?: string
+  num: number
+  receiver_id?: string
+  print_color?: string
+  remarks?: string
+}
+
+export interface ConvertPreOrderPayload {
+  customer_id?: string
+  due_date: string
+  priority: string
+  unit_price: number
+  route_id?: string
+}
+
+export interface AbnormalFlow {
+  id: string
+  sales_order_id: string
+  abnormal_type: string
+  reason: string
+  selected_start_node: string
+  selected_process_nodes: string[]
+  need_inspection: boolean
+  need_finance_bill: boolean
+  need_delivery: boolean
+  initiated_by: string
+  approved_by?: string
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface AbnormalFlowCreatePayload {
+  abnormal_type: string
+  reason: string
+  selected_start_node: string
+  selected_process_nodes: string[]
+  need_inspection: boolean
+  need_finance_bill: boolean
+  need_delivery: boolean
+}
+
+export interface MakingAssignment {
+  id: string
+  sales_order_id: string
+  making_task_id?: string
+  supervisor_id: string
+  employee_id: string
+  assigned_sets: number
+  completed_sets: number
+  status: string
+  submitted_to_epin_at?: string
+  remarks?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface EpinBatch {
+  id: string
+  sales_order_id: string
+  making_assignment_id: string
+  employee_id: string
+  sets_count: number
+  status: string
+  received_by?: string
+  received_at?: string
+  completed_at?: string
+  remarks?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface WorkflowFinanceBillSummary {
+  id: string
+  bill_no: string
+  amount?: number | null
+  bill_status: string
+  printed_at?: string | null
+  released_at?: string | null
+  remarks?: string | null
+}
+
+export interface WorkflowDeliverySummary {
+  id: string
+  delivery_no: string
+  status: string
+  address: string
+  delivery_time: string
+  driver_name?: string | null
+  logistics_no?: string | null
+  signed_by?: string | null
+  signed_at?: string | null
+  remark?: string | null
+}
+
+export interface WorkflowSignSummary {
+  id: string
+  signed_by: string
+  signed_at: string
+  remarks?: string | null
+}
+
+export interface WorkflowFulfillmentSummary {
+  sales_order_id: string
+  bill?: WorkflowFinanceBillSummary
+  delivery?: WorkflowDeliverySummary
+  sign?: WorkflowSignSummary
+  current_stage: string
+  can_view_amount: boolean
 }

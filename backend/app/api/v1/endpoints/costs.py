@@ -1,6 +1,6 @@
 import re
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -10,6 +10,7 @@ from app.api.deps import require_permission
 from app.db.session import get_db
 from app.models.customer import Customer
 from app.models.finance import CostRecord
+from app.models.production import WorkOrder, WorkOrderStep
 from app.models.rbac import User
 from app.models.sales import SalesOrder
 from app.schemas.common import PageResponse
@@ -26,9 +27,13 @@ from app.schemas.cost import (
     SalespersonMonthlyRow,
 )
 from app.services.audit import log_operation
-from app.services.excel import build_xlsx_response
+from app.services.excel import build_multi_sheet_xlsx_response, build_xlsx_response
 
 router = APIRouter()
+
+MONEY_0_FORMAT = '#,##0'
+MONEY_2_FORMAT = '#,##0.00'
+QTY_FORMAT = '#,##0'
 
 
 @router.get("/cost-records", response_model=PageResponse[CostRecordRead])
@@ -57,9 +62,30 @@ def create_cost_record(
     if order is None or order.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sales order not found.")
 
+    work_order_id = payload.work_order_id
+    if work_order_id:
+        work_order = db.get(WorkOrder, work_order_id)
+        if work_order is None or work_order.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work order not found.")
+        if work_order.sales_order_id != payload.sales_order_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Work order does not belong to the selected sales order.")
+
+    if payload.work_order_step_id:
+        step = db.get(WorkOrderStep, payload.work_order_step_id)
+        if step is None or step.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work order step not found.")
+        if work_order_id and step.work_order_id != work_order_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Work order step does not belong to the selected work order.")
+        step_work_order = db.get(WorkOrder, step.work_order_id)
+        if step_work_order is None or step_work_order.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Step work order not found.")
+        if step_work_order.sales_order_id != payload.sales_order_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Work order step does not belong to the selected sales order.")
+        work_order_id = step.work_order_id
+
     cost_record = CostRecord(
         sales_order_id=payload.sales_order_id,
-        work_order_id=payload.work_order_id,
+        work_order_id=work_order_id,
         work_order_step_id=payload.work_order_step_id,
         cost_type=payload.cost_type,
         amount=Decimal(str(payload.amount)),
@@ -134,6 +160,18 @@ def _number(value: object) -> Decimal:
     return Decimal(match.group(0)) if match else Decimal("0")
 
 
+def _round_money(value: Decimal) -> int:
+    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _round_2(value: Decimal) -> float:
+    return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _cm_value(value: object) -> Decimal:
+    return (_number(value) / Decimal("10")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 def _order_type(order: SalesOrder) -> str:
     return str((order.plate_details or {}).get("order_type") or "new_cylinder")
 
@@ -163,6 +201,40 @@ def _settlement_type(customer: Customer) -> str:
         return customer.reconciliation_cycle
     days = customer.payment_terms_days or 0
     return "Cash" if days <= 0 else f"{days}days"
+
+
+def _order_cylinder_no(order: SalesOrder) -> str:
+    details = order.plate_details or {}
+    color_rows = order.color_rows or []
+    candidates = [
+        details.get("cylinder_id"),
+        details.get("no"),
+        details.get("sample_no"),
+        details.get("original_no"),
+    ]
+    for row in color_rows:
+        candidates.extend([row.get("public_no"), row.get("color_cylinder_no"), row.get("cylinder_no")])
+    for item in candidates:
+        text = str(item or "").strip()
+        if text:
+            return text
+    return order.order_no
+
+
+def _order_size_cm(order: SalesOrder) -> tuple[Decimal, Decimal]:
+    details = order.plate_details or {}
+    c_value = details.get("c_value") or details.get("c") or details.get("cylinder_circumference")
+    l_value = details.get("l_value") or details.get("l") or details.get("cylinder_length") or details.get("unit_l")
+    return _cm_value(c_value), _cm_value(l_value)
+
+
+def _order_product_name(order: SalesOrder) -> str:
+    details = order.plate_details or {}
+    if details.get("product_name"):
+        return str(details["product_name"])
+    if order.items:
+        return order.items[0].product_name
+    return order.product_summary
 
 
 def _sales_orders_for_period(
@@ -204,23 +276,41 @@ def _salesperson_monthly_rows(
     customer_id: UUID | None = None,
     salesperson: str | None = None,
 ) -> list[SalespersonMonthlyRow]:
-    buckets: dict[str, dict[str, Decimal]] = {}
+    buckets: dict[tuple[str, UUID, str], dict[str, object]] = {}
     for order, customer in _sales_orders_for_period(db, date_from, date_to, rework_mode, customer_id, salesperson):
         name = _salesperson(order, customer)
+        settlement_type = _settlement_type(customer)
         new_pcs, old_pcs = _order_pcs(order)
-        bucket = buckets.setdefault(name, {"new_pcs": Decimal("0"), "old_pcs": Decimal("0"), "total_amount": Decimal("0")})
-        bucket["new_pcs"] += new_pcs
-        bucket["old_pcs"] += old_pcs
-        bucket["total_amount"] += _decimal(order.total_amount)
+        bucket = buckets.setdefault(
+            (name, customer.id, settlement_type),
+            {
+                "salesperson": name,
+                "customer_id": customer.id,
+                "customer_name": customer.name,
+                "settlement_type": settlement_type,
+                "new_pcs": Decimal("0"),
+                "old_pcs": Decimal("0"),
+                "total_amount": Decimal("0"),
+            },
+        )
+        bucket["new_pcs"] = bucket["new_pcs"] + new_pcs
+        bucket["old_pcs"] = bucket["old_pcs"] + old_pcs
+        bucket["total_amount"] = bucket["total_amount"] + _decimal(order.total_amount)
 
     return [
         SalespersonMonthlyRow(
-            salesperson=name,
+            salesperson=str(values["salesperson"]),
+            customer_id=values["customer_id"],
+            customer_name=str(values["customer_name"]),
+            settlement_type=str(values["settlement_type"]),
             new_pcs=float(values["new_pcs"]),
             old_pcs=float(values["old_pcs"]),
             total_amount=float(values["total_amount"]),
         )
-        for name, values in sorted(buckets.items(), key=lambda item: item[1]["total_amount"], reverse=True)
+        for _, values in sorted(
+            buckets.items(),
+            key=lambda item: (str(item[1]["salesperson"]), str(item[1]["settlement_type"]), str(item[1]["customer_name"])),
+        )
     ]
 
 
@@ -232,19 +322,22 @@ def _customer_monthly_sales_rows(
     customer_id: UUID | None = None,
     salesperson: str | None = None,
 ) -> list[CustomerMonthlySalesRow]:
-    buckets: dict[UUID, dict[str, object]] = {}
+    buckets: dict[tuple[str, UUID, str], dict[str, object]] = {}
     for order, customer in _sales_orders_for_period(db, date_from, date_to, rework_mode, customer_id, salesperson):
         new_pcs, old_pcs = _order_pcs(order)
         amount = _decimal(order.total_amount)
+        order_salesperson = _salesperson(order, customer)
+        settlement_type = _settlement_type(customer)
         bucket = buckets.setdefault(
-            customer.id,
+            (order_salesperson, customer.id, settlement_type),
             {
-                "salesperson": _salesperson(order, customer),
+                "salesperson": order_salesperson,
+                "customer_id": customer.id,
                 "customer_name": customer.name,
                 "new_pcs": Decimal("0"),
                 "old_pcs": Decimal("0"),
                 "total_amount": Decimal("0"),
-                "settlement_type": _settlement_type(customer),
+                "settlement_type": settlement_type,
             },
         )
         bucket["new_pcs"] = bucket["new_pcs"] + new_pcs
@@ -252,19 +345,20 @@ def _customer_monthly_sales_rows(
         bucket["total_amount"] = bucket["total_amount"] + amount
 
     rows: list[CustomerMonthlySalesRow] = []
-    for customer_id, values in buckets.items():
+    for _, values in buckets.items():
         pcs = values["new_pcs"] + values["old_pcs"]
         price = values["total_amount"] / pcs if pcs else Decimal("0")
         rows.append(
             CustomerMonthlySalesRow(
                 salesperson=str(values["salesperson"]),
-                customer_id=customer_id,
+                customer_id=values["customer_id"],
                 customer_name=str(values["customer_name"]),
+                settlement_type=str(values["settlement_type"]),
+                pcs=float(pcs),
                 new_pcs=float(values["new_pcs"]),
                 old_pcs=float(values["old_pcs"]),
                 total_amount=float(values["total_amount"]),
                 price=round(float(price), 2),
-                settlement_type=str(values["settlement_type"]),
             )
         )
     return sorted(rows, key=lambda row: (row.salesperson, row.customer_name))
@@ -276,6 +370,46 @@ def _sales_summary(rows: list[SalespersonMonthlyRow] | list[CustomerMonthlySales
         old_pcs=float(sum(Decimal(str(row.old_pcs)) for row in rows)),
         total_amount=float(sum(Decimal(str(row.total_amount)) for row in rows)),
     )
+
+
+def _monthly_total_sales_detail_rows(
+    db: Session,
+    date_from: date | None,
+    date_to: date | None,
+    rework_mode: str,
+    customer_id: UUID | None = None,
+    salesperson: str | None = None,
+) -> list[list[object]]:
+    rows: list[list[object]] = []
+    for order, customer in _sales_orders_for_period(db, date_from, date_to, rework_mode, customer_id, salesperson):
+        new_pcs, old_pcs = _order_pcs(order)
+        total_qty = new_pcs + old_pcs
+        amount = _decimal(order.total_amount)
+        first_item = order.items[0] if order.items else None
+        rate = _decimal(first_item.unit_price if first_item else 0)
+        price_per_pc = amount / total_qty if total_qty else Decimal("0")
+        c_cm, l_cm = _order_size_cm(order)
+        rows.append(
+            [
+                _salesperson(order, customer),
+                _settlement_type(customer),
+                _order_cylinder_no(order),
+                customer.name,
+                _order_product_name(order),
+                _round_money(total_qty),
+                _round_2(rate),
+                _round_2(price_per_pc),
+                _round_money(amount),
+                _round_2(c_cm),
+                _round_2(l_cm),
+                _round_money(new_pcs),
+                _round_money(old_pcs),
+                order.confirmed_at.date().isoformat() if order.confirmed_at else "",
+                order.order_date.isoformat(),
+                order.due_date.isoformat() if order.due_date else "",
+            ]
+        )
+    return rows
 
 
 @router.get("/reports/salesperson-monthly", response_model=SalespersonMonthlyReport)
@@ -320,8 +454,18 @@ def export_salesperson_monthly_report(
     db.commit()
     return build_xlsx_response(
         "salesperson-monthly.xlsx",
-        ["业务员", "新支数", "旧支数", "销售额"],
-        [[row.salesperson, row.new_pcs, row.old_pcs, row.total_amount] for row in rows],
+        ["Salesman", "Type", "Customer", "New Pcs", "Old Pcs", "Total Amount(TK)"],
+        [
+            [
+                row.salesperson,
+                row.settlement_type,
+                row.customer_name,
+                _round_money(Decimal(str(row.new_pcs))),
+                _round_money(Decimal(str(row.old_pcs))),
+                _round_money(Decimal(str(row.total_amount))),
+            ]
+            for row in rows
+        ],
     )
 
 
@@ -367,18 +511,119 @@ def export_customer_monthly_sales_report(
     db.commit()
     return build_xlsx_response(
         "customer-monthly-sales.xlsx",
-        ["业务员", "客户名称", "新支数", "旧支数", "销售额", "平均单价", "结算方式"],
+        ["Salesman", "Type", "Customer", "Pcs", "Total Amount(TK)", "Avg Price/Pc"],
         [
             [
                 row.salesperson,
-                row.customer_name,
-                row.new_pcs,
-                row.old_pcs,
-                row.total_amount,
-                row.price,
                 row.settlement_type,
+                row.customer_name,
+                _round_money(Decimal(str(row.pcs))),
+                _round_money(Decimal(str(row.total_amount))),
+                _round_2(Decimal(str(row.price))),
             ]
             for row in rows
+        ],
+    )
+
+
+@router.get("/reports/monthly-total-sales/export")
+def export_monthly_total_sales_report(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    rework_mode: str = Query(default="all", pattern="^(all|exclude_rework|only_rework)$"),
+    customer_id: UUID | None = None,
+    salesperson: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("report:export")),
+):
+    detail_rows = _monthly_total_sales_detail_rows(db, date_from, date_to, rework_mode, customer_id, salesperson)
+    salesperson_rows = _salesperson_monthly_rows(db, date_from, date_to, rework_mode, customer_id, salesperson)
+    customer_rows = _customer_monthly_sales_rows(db, date_from, date_to, rework_mode, customer_id, salesperson)
+    period = f"{date_from or ''}_{date_to or ''}".strip("_") or "all"
+    log_operation(
+        db,
+        user_id=current_user.id,
+        module="report",
+        action="export_monthly_total_sales",
+        target_type="monthly_total_sales_report",
+        after_data={
+            "detail_count": len(detail_rows),
+            "salesperson_count": len(salesperson_rows),
+            "customer_count": len(customer_rows),
+            "date_from": str(date_from) if date_from else None,
+            "date_to": str(date_to) if date_to else None,
+            "customer_id": str(customer_id) if customer_id else None,
+            "salesperson": salesperson,
+        },
+    )
+    db.commit()
+    return build_multi_sheet_xlsx_response(
+        f"Total Sales {period}.xlsx",
+        [
+            {
+                "title": "Details",
+                "headers": [
+                    "Salesman",
+                    "Cash or Month",
+                    "Cylinder No.",
+                    "Customer",
+                    "ProductName",
+                    "Total QTY",
+                    "Price/cm2",
+                    "Price/Pc",
+                    "Amount(TK)",
+                    "C(cm)",
+                    "L(cm)",
+                    "New QTY",
+                    "Old QTY",
+                    "Print date",
+                    "Order Date",
+                    "Finish Date",
+                ],
+                "rows": detail_rows,
+                "number_formats": {
+                    "Total QTY": QTY_FORMAT,
+                    "Price/cm2": MONEY_2_FORMAT,
+                    "Price/Pc": MONEY_2_FORMAT,
+                    "Amount(TK)": MONEY_0_FORMAT,
+                    "C(cm)": MONEY_2_FORMAT,
+                    "L(cm)": MONEY_2_FORMAT,
+                    "New QTY": QTY_FORMAT,
+                    "Old QTY": QTY_FORMAT,
+                },
+            },
+            {
+                "title": "Salesman Monthly Summary",
+                "headers": ["Salesman", "Type", "Customer", "New Pcs", "Old Pcs", "Total Amount(TK)"],
+                "rows": [
+                    [
+                        row.salesperson,
+                        row.settlement_type,
+                        row.customer_name,
+                        _round_money(Decimal(str(row.new_pcs))),
+                        _round_money(Decimal(str(row.old_pcs))),
+                        _round_money(Decimal(str(row.total_amount))),
+                    ]
+                    for row in salesperson_rows
+                ],
+                "number_formats": {"New Pcs": QTY_FORMAT, "Old Pcs": QTY_FORMAT, "Total Amount(TK)": MONEY_0_FORMAT},
+            },
+            {
+                "title": "Customer Monthly Summary",
+                "headers": ["Salesman", "Type", "Customer", "Pcs", "Total Amount(TK)", "Avg Price/Pc"],
+                "rows": [
+                    [
+                        row.salesperson,
+                        row.settlement_type,
+                        row.customer_name,
+                        _round_money(Decimal(str(row.pcs))),
+                        _round_money(Decimal(str(row.total_amount))),
+                        _round_2(Decimal(str(row.price))),
+                    ]
+                    for row in customer_rows
+                ],
+                "number_formats": {"Pcs": QTY_FORMAT, "Total Amount(TK)": MONEY_0_FORMAT, "Avg Price/Pc": MONEY_2_FORMAT},
+            },
         ],
     )
 
@@ -386,7 +631,7 @@ def export_customer_monthly_sales_report(
 @router.get("/reports/profit", response_model=ProfitReportResponse)
 def profit_report(
     db: Session = Depends(get_db),
-    _=Depends(require_permission("report:view")),
+    _=Depends(require_permission("cost:view")),
 ) -> ProfitReportResponse:
     rows = _profit_rows(db)
     revenue = sum(Decimal(str(row.revenue)) for row in rows)
@@ -407,6 +652,7 @@ def profit_report(
 @router.get("/reports/profit/export")
 def export_profit_report(
     db: Session = Depends(get_db),
+    _=Depends(require_permission("cost:view")),
     current_user: User = Depends(require_permission("report:export")),
 ):
     rows = _profit_rows(db)

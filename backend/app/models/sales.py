@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -51,3 +51,27 @@ class SalesOrderItem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     sales_order: Mapped[SalesOrder] = relationship(back_populates="items")
+
+
+class EntrustLayoutTemplate(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "entrust_layout_templates"
+
+    name: Mapped[str] = mapped_column(String(128), index=True)
+    template_type: Mapped[str] = mapped_column(String(32), default="template", index=True)
+    order_no: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    settings: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+class PlateNumberReservation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "plate_number_reservations"
+
+    plate_no: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    prefix: Mapped[str] = mapped_column(String(4), index=True)
+    year_month: Mapped[str] = mapped_column(String(6), index=True)
+    sequence_no: Mapped[int] = mapped_column(Integer, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="reserved", index=True)
+    assigned_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
+    used_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("sales_orders.id"), nullable=True, index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    returned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)

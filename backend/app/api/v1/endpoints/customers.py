@@ -87,6 +87,12 @@ def export_customers(
         "customers.xlsx",
         [
             "Legacy Company ID",
+            "Payment Method",
+            "Minimum Price",
+            "VAT 15%",
+            "AIT 5%",
+            "Advance %",
+            "Lister",
             "客户编号",
             "客户名称",
             "客户类型",
@@ -113,6 +119,12 @@ def export_customers(
         [
             [
                 customer.legacy_company_id or "",
+                customer.payment_method or "",
+                customer.minimum_price or "",
+                "Y" if customer.vat_enabled else "N",
+                "Y" if customer.ait_enabled else "N",
+                customer.advance_percent or "",
+                customer.lister or "",
                 customer.customer_code,
                 customer.name,
                 customer.customer_type or "",
