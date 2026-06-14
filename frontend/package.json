@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "smoke:text": "node scripts/text-smoke.mjs",
+    "smoke:navigation": "node scripts/navigation-smoke.mjs"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",

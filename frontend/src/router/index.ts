@@ -41,9 +41,7 @@ const router = createRouter({
         },
         {
           path: 'products',
-          name: 'products',
-          component: () => import('../views/ProductsView.vue'),
-          meta: { permission: 'product:view' }
+          redirect: '/orders'
         },
         {
           path: 'orders',
@@ -64,12 +62,6 @@ const router = createRouter({
           meta: { permission: 'order:view' }
         },
         {
-          path: 'process-routes',
-          name: 'process-routes',
-          component: () => import('../views/ProcessRoutesView.vue'),
-          meta: { permission: 'route:view' }
-        },
-        {
           path: 'work-orders',
           name: 'work-orders',
           component: () => import('../views/WorkOrdersView.vue'),
@@ -88,10 +80,20 @@ const router = createRouter({
           meta: { permission: 'work_order:view', roles: ['admin', 'boss', 'production_manager'] }
         },
         {
+          path: 'workflows',
+          name: 'workflows',
+          component: () => import('../views/WorkflowV2View.vue'),
+          meta: { permission: 'workflow_v2:view' }
+        },
+        {
+          path: 'workflow-v2',
+          redirect: { name: 'workflows' }
+        },
+        {
           path: 'my-tasks',
           name: 'my-tasks',
           component: () => import('../views/MyTasksView.vue'),
-          meta: { permission: 'step:report' }
+          meta: { permission: 'step:report', roles: ['admin', 'production_manager', 'operator'] }
         },
         {
           path: 'inspections',
@@ -115,19 +117,13 @@ const router = createRouter({
           path: 'finance',
           name: 'finance',
           component: () => import('../views/FinanceView.vue'),
-          meta: { permission: 'finance:receivable:view' }
+          meta: { permission: 'finance:receivable:view', roles: ['admin', 'boss', 'finance'] }
         },
         {
           path: 'receipts',
           name: 'receipts',
           component: () => import('../views/ReceiptsView.vue'),
-          meta: { permission: 'finance:receivable:view' }
-        },
-        {
-          path: 'production-notices',
-          name: 'production-notices',
-          component: () => import('../views/PrintJobsView.vue'),
-          meta: { permission: 'order:view', roles: ['admin', 'boss', 'sales', 'designer', 'production_manager'] }
+          meta: { permission: 'finance:receivable:view', roles: ['admin', 'boss', 'finance'] }
         },
         {
           path: 'print-jobs',

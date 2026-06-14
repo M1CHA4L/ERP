@@ -10,6 +10,7 @@ class ReceivableRead(BaseModel):
 
     id: UUID
     receivable_no: str
+    cylinder_no: str | None = None
     sales_order_id: UUID | None
     delivery_order_id: UUID | None
     customer_id: UUID
@@ -82,7 +83,7 @@ class ReceiptDailyEntryCreate(BaseModel):
     payee_name: str | None = None
     abstract: str | None = None
     remark: str | None = None
-    allocations: list[ReceiptAllocationCreate]
+    allocations: list[ReceiptAllocationCreate] = Field(min_length=1)
 
 
 class ReceiptDailyEntryRead(BaseModel):
@@ -148,5 +149,9 @@ class CustomerStatementRead(BaseModel):
     received_amount: float
     due_amount: float
     status: str
+    price_approval_status: str = "pending"
+    price_approved_at: datetime | None = None
+    price_approved_by: UUID | None = None
+    price_approval_remark: str | None = None
     printed_at: datetime | None = None
     remark: str | None = None

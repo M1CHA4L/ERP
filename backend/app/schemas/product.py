@@ -40,3 +40,15 @@ class ProductRead(BaseModel):
     reference_price: float | None
     status: str
     remark: str | None
+
+
+class ProductOptionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    product_code: str
+    name: str
+    specification: str | None
+    unit: str
+    default_route_id: UUID | None
+    reference_price: float | None

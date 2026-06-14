@@ -49,6 +49,45 @@ COMPANY_HEADERS_WITH_RID = [
 
 COMPANY_HEADERS_WITHOUT_RID = [header for header in COMPANY_HEADERS_WITH_RID if header != "RID"]
 
+COMPANY_ARCHIVE_HEADERS = [
+    "ID",
+    "RID",
+    "FullName",
+    "SimpleName",
+    "IsCus",
+    "IsSup",
+    "IsClass",
+    "Deleted",
+    "IsStop",
+    "SaleMan",
+    "SaleMan2",
+    "Contact",
+    "ContactPhone",
+    "MbPhone",
+    "TelePhone",
+    "Fax",
+    "Address",
+    "CustomerType",
+    "SetPeriodWay",
+    "SetPeriodDay",
+    "ReconMonth",
+    "ReconDay",
+    "TaxNumber",
+    "Tax",
+    "Office",
+    "Bank",
+    "BankAccounts",
+    "KHZH",
+    "FHFS",
+    "BeMoney",
+    "CopperTime",
+    "CopperThick",
+    "TPPrice",
+    "MinPrice",
+    "Price",
+    "Remarks",
+]
+
 
 def read_sqlcmd_tsv(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as file:
@@ -72,6 +111,33 @@ def read_sqlcmd_tsv(path: Path) -> list[dict[str, str]]:
     return items
 
 
+def stitch_sqlcmd_row_fragments(data_rows: list[list[str]], expected_columns: int) -> list[list[str]]:
+    stitched_rows: list[list[str]] = []
+    pending: list[str] | None = None
+
+    for row in data_rows:
+        if not row:
+            continue
+        first_cell = row[0].strip()
+        if pending is None and (first_cell.startswith("--") or first_cell.startswith("(")):
+            continue
+
+        if pending is None:
+            pending = list(row)
+        else:
+            pending[-1] = f"{pending[-1]}\n{row[0]}"
+            pending.extend(row[1:])
+
+        if len(pending) >= expected_columns:
+            stitched_rows.append(pending)
+            pending = None
+
+    if pending is not None:
+        stitched_rows.append(pending)
+
+    return stitched_rows
+
+
 def read_company_tsv(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as file:
         raw_rows = list(csv.reader(file, delimiter="\t"))
@@ -83,12 +149,17 @@ def read_company_tsv(path: Path) -> list[dict[str, str]]:
     if has_header:
         headers = first_row
         data_rows = raw_rows[1:]
+    elif len(first_row) == len(COMPANY_ARCHIVE_HEADERS):
+        headers = COMPANY_ARCHIVE_HEADERS
+        data_rows = raw_rows
     elif len(first_row) == len(COMPANY_HEADERS_WITH_RID):
         headers = COMPANY_HEADERS_WITH_RID
         data_rows = raw_rows
     else:
         headers = COMPANY_HEADERS_WITHOUT_RID
         data_rows = raw_rows
+
+    data_rows = stitch_sqlcmd_row_fragments(data_rows, len(headers))
 
     rows: list[dict[str, str]] = []
     for row in data_rows:
@@ -112,25 +183,100 @@ def truthy_int(value: Any) -> bool:
     return text in {"1", "true", "True", "TRUE", "是"}
 
 
+def first_text(row: dict[str, str], names: tuple[str, ...], max_length: int | None = None) -> str | None:
+    for name in names:
+        if name not in row:
+            continue
+        value = clean_text(row.get(name), max_length)
+        if value:
+            return value
+    return None
+
+
+def first_decimal(row: dict[str, str], names: tuple[str, ...]) -> Decimal | None:
+    for name in names:
+        if name not in row:
+            continue
+        value = to_decimal(row.get(name))
+        if value is not None:
+            return value
+    return None
+
+
+def first_int(row: dict[str, str], names: tuple[str, ...]) -> int | None:
+    for name in names:
+        if name not in row:
+            continue
+        value = to_decimal(row.get(name))
+        if value is not None:
+            return int(value)
+    return None
+
+
+def tax_flag(value: Any) -> bool:
+    text = clean_text(value)
+    if not text:
+        return False
+    if text.lower() in {"y", "yes", "true", "vat", "vat15", "vat 15%", "1"} or text in {"是", "有"}:
+        return True
+    numeric_value = to_decimal(text)
+    return bool(numeric_value and numeric_value > 0)
+
+
+def payment_method_from_row(row: dict[str, str]) -> str | None:
+    value = first_text(row, ("JKFS", "PaymentMethod", "PayWay", "payment_method"), 64)
+    if value:
+        return value
+    if "SetPeriodWay" in row:
+        return "Month" if truthy_int(row.get("SetPeriodWay")) else "Cash"
+    return None
+
+
+def reconciliation_cycle_from_row(row: dict[str, str]) -> str | None:
+    value = first_text(row, ("ReconCycle", "reconciliation_cycle"), 32)
+    if value:
+        return value
+    if "ReconMonth" not in row:
+        return None
+    recon_month = clean_text(row.get("ReconMonth"), 32)
+    if recon_month in {"0", "0.0"}:
+        return "本月"
+    if recon_month in {"1", "1.0"}:
+        return "上月"
+    return recon_month or None
+
+
+def put_if_present(
+    values: dict[str, Any],
+    field: str,
+    row: dict[str, str],
+    column_names: tuple[str, ...],
+    value: Any,
+) -> None:
+    if any(name in row for name in column_names):
+        values[field] = value
+
+
 def customer_values_from_company_row(row: dict[str, str], salesperson: User | None) -> dict[str, Any]:
     contact_phone = clean_text(row.get("ContactPhone"), 32)
     mobile_phone = clean_text(row.get("MbPhone"), 32)
-    jkfs = clean_text(row.get("JKFS"), 64)
+    payment_method = payment_method_from_row(row)
     remark = clean_text(row.get("Remarks"))
-    payment_note = f"Legacy JKFS: {jkfs}" if jkfs else None
+    payment_note = f"Legacy payment method: {payment_method}" if payment_method else None
     if remark and payment_note:
         remark = f"{remark}\n{payment_note}"
     elif payment_note:
         remark = payment_note
 
-    return {
+    values: dict[str, Any] = {
         "legacy_company_id": clean_text(row.get("RID"), 32) or clean_text(row.get("ID"), 32),
         "name": clean_text(row.get("FullName"), 128) or clean_text(row.get("SimpleName"), 128),
         "contact_name": clean_text(row.get("Contact"), 64),
         "phone": contact_phone or mobile_phone,
         "address": clean_text(row.get("Address"), 255),
         "salesperson_id": salesperson.id if salesperson else None,
-        "payment_terms_days": payment_terms_to_days(jkfs),
+        "payment_terms_days": first_int(row, ("SetPeriodDay", "AccountPeriod", "payment_terms_days"))
+        or payment_terms_to_days(payment_method),
         "copper_thickness": to_decimal(row.get("CopperThick")),
         "chrome_time": to_decimal(row.get("CopperTime")),
         "opening_remark": (
@@ -140,6 +286,24 @@ def customer_values_from_company_row(row: dict[str, str], salesperson: User | No
         "remark": remark,
         "status": "disabled" if truthy_int(row.get("IsStop")) else "active",
     }
+    put_if_present(values, "customer_type", row, ("CustomerType", "customer_type"), first_text(row, ("CustomerType", "customer_type"), 32))
+    put_if_present(values, "payment_method", row, ("JKFS", "PaymentMethod", "PayWay", "payment_method", "SetPeriodWay"), payment_method)
+    put_if_present(values, "minimum_price", row, ("MinPrice", "MinimumPrice", "minimum_price"), first_decimal(row, ("MinPrice", "MinimumPrice", "minimum_price")))
+    put_if_present(values, "advance_percent", row, ("AdvancePercent", "Advance", "advance_percent"), first_decimal(row, ("AdvancePercent", "Advance", "advance_percent")))
+    put_if_present(values, "lister", row, ("Lister", "JGY", "SaleMan2", "YWZG", "DNG"), first_text(row, ("Lister", "JGY", "SaleMan2", "YWZG", "DNG"), 64))
+    put_if_present(values, "tax_no", row, ("TaxNumber", "TaxNo", "tax_no"), first_text(row, ("TaxNumber", "TaxNo", "tax_no"), 64))
+    put_if_present(values, "office", row, ("Office", "office"), first_text(row, ("Office", "office"), 64))
+    put_if_present(values, "bank_name", row, ("Bank", "BankName", "bank_name"), first_text(row, ("Bank", "BankName", "bank_name"), 128))
+    put_if_present(values, "bank_account", row, ("BankAccounts", "KHZH", "BankAccount", "bank_account"), first_text(row, ("BankAccounts", "KHZH", "BankAccount", "bank_account"), 128))
+    put_if_present(values, "delivery_method", row, ("FHFS", "DeliveryMethod", "delivery_method"), first_text(row, ("FHFS", "DeliveryMethod", "delivery_method"), 64))
+    put_if_present(values, "stripping_cost", row, ("TPPrice", "StrippingCost", "stripping_cost"), first_decimal(row, ("TPPrice", "StrippingCost", "stripping_cost")))
+    put_if_present(values, "reconciliation_cycle", row, ("ReconMonth", "ReconCycle", "reconciliation_cycle"), reconciliation_cycle_from_row(row))
+    put_if_present(values, "reconciliation_day", row, ("ReconDay", "reconciliation_day"), first_int(row, ("ReconDay", "reconciliation_day")))
+    put_if_present(values, "company_phone", row, ("TelePhone", "CompanyPhone", "company_phone"), first_text(row, ("TelePhone", "CompanyPhone", "company_phone"), 32))
+    put_if_present(values, "fax", row, ("Fax", "fax"), first_text(row, ("Fax", "fax"), 32))
+    put_if_present(values, "vat_enabled", row, ("Tax", "VAT", "vat_enabled"), tax_flag(first_text(row, ("Tax", "VAT", "vat_enabled"), 100)))
+    put_if_present(values, "ait_enabled", row, ("AIT", "AIT5", "ait_enabled"), tax_flag(first_text(row, ("AIT", "AIT5", "ait_enabled"), 100)))
+    return values
 
 
 def void_opening_receivable_if_needed(db: Session, customer: Customer) -> str | None:

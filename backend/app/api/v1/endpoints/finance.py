@@ -1,5 +1,6 @@
+import re
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 from uuid import UUID
 
@@ -43,6 +44,35 @@ from app.services.state_machine import OrderStatus
 
 router = APIRouter()
 
+FINANCE_MODULE_ROLES = {"admin", "boss", "finance"}
+BILL_PRICE_APPROVER_ROLES = {"admin", "boss"}
+VAT_RATE = Decimal("0.15")
+
+
+def _has_finance_module_role(current_user: User) -> bool:
+    return any(role.code in FINANCE_MODULE_ROLES for role in current_user.roles)
+
+
+def _assert_finance_module_role(current_user: User) -> None:
+    if not _has_finance_module_role(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Finance module access requires finance role.")
+
+
+def _has_bill_price_approver_role(current_user: User) -> bool:
+    return any(role.code in BILL_PRICE_APPROVER_ROLES for role in current_user.roles)
+
+
+def _assert_bill_price_approver_role(current_user: User) -> None:
+    if not _has_bill_price_approver_role(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bill price approval requires boss/admin role.")
+
+
+def _assert_receivable_scope(current_user: User, sales_order_id: UUID | None) -> None:
+    if _has_finance_module_role(current_user):
+        return
+    if sales_order_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Receivable ledger access requires finance role.")
+
 
 def _decimal(value: float | Decimal | None) -> Decimal:
     return Decimal(str(value or 0))
@@ -58,6 +88,36 @@ def _next_month(value: date) -> date:
 
 def _money(value: Decimal | float | int | None) -> str:
     return f"{_decimal(value):,.2f}"
+
+
+def _numeric_decimal(value: object) -> Decimal:
+    if value in (None, ""):
+        return Decimal("0")
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, int | float):
+        return Decimal(str(value))
+    match = re.search(r"-?\d+(?:\.\d+)?", str(value).replace(",", ""))
+    return Decimal(match.group(0)) if match else Decimal("0")
+
+
+def _round_2(value: Decimal | float | int | None) -> Decimal:
+    return _decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _bill_decimal(value: Decimal | float | int | None) -> str:
+    return f"{_round_2(value):,.2f}"
+
+
+def _bill_amount(value: Decimal | float | int | None) -> str:
+    return f"{_decimal(value).quantize(Decimal('1'), rounding=ROUND_HALF_UP):,.0f}"
+
+
+def _length_cm(value: object) -> str:
+    number = _numeric_decimal(value)
+    if number == 0:
+        return ""
+    return _bill_decimal(number / Decimal("10"))
 
 
 def _h(value: object) -> str:
@@ -110,8 +170,8 @@ def _order_quantity(order: SalesOrder) -> Decimal:
 def _order_size(order: SalesOrder) -> tuple[str, str]:
     details = order.plate_details or {}
     return (
-        str(details.get("c_value") or details.get("c") or details.get("cylinder_circumference") or ""),
-        str(details.get("l_value") or details.get("l") or details.get("cylinder_length") or details.get("unit_l") or ""),
+        _length_cm(details.get("c_value") or details.get("c") or details.get("cylinder_circumference")),
+        _length_cm(details.get("l_value") or details.get("l") or details.get("cylinder_length") or details.get("unit_l")),
     )
 
 
@@ -167,6 +227,25 @@ def _sum_order_receivable(db: Session, customer_id: UUID, cylinder_no: str, acco
         .all()
     )
     return sum((_decimal(order.total_amount) for order in orders if cylinder_no in _order_cylinder_nos(order)), Decimal("0"))
+
+
+def _matching_orders_by_cylinder(
+    db: Session,
+    *,
+    cylinder_no: str,
+    accounting_month: date,
+    customer_id: UUID | None = None,
+) -> list[SalesOrder]:
+    start = _month_start(accounting_month)
+    end = _next_month(start)
+    query = db.query(SalesOrder).filter(
+        SalesOrder.deleted_at.is_(None),
+        SalesOrder.order_date >= start,
+        SalesOrder.order_date < end,
+    )
+    if customer_id:
+        query = query.filter(SalesOrder.customer_id == customer_id)
+    return [order for order in query.all() if cylinder_no in _order_cylinder_nos(order)]
 
 
 def _previous_due(db: Session, customer_id: UUID, cylinder_no: str, accounting_month: date) -> Decimal:
@@ -362,7 +441,7 @@ def _receipt_html_v2(receipt: ReceiptDailyEntry, customer: Customer | None) -> s
 """
 
 
-def _statement_html_v2(statement: CustomerStatementRun, customer: Customer | None, db: Session) -> str:
+def _statement_html_v2(statement: CustomerStatementRun, customer: Customer | None, db: Session, *, with_header: bool = True) -> str:
     selected = {str(cylinder_no).strip() for cylinder_no in statement.selected_cylinder_nos if str(cylinder_no).strip()}
     orders = _statement_orders(db, statement)
     total_new = Decimal("0")
@@ -388,11 +467,11 @@ def _statement_html_v2(statement: CustomerStatementRun, customer: Customer | Non
             f"<td class='product-name'>{_h(details.get('product_name') or (first_item.product_name if first_item else order.product_summary))}</td>"
             f"<td>{_h(c_size)}</td>"
             f"<td>{_h(l_size)}</td>"
-            f"<td class='num'>{_money(unit_price)}</td>"
-            f"<td class='num'>{_money(price_per_pc)}</td>"
+            f"<td class='num'>{_bill_decimal(unit_price)}</td>"
+            f"<td class='num'>{_bill_decimal(price_per_pc)}</td>"
             f"<td>{_quantity_text(quantity) if not is_old else ''}</td>"
             f"<td>{_quantity_text(quantity) if is_old else ''}</td>"
-            f"<td class='num'>{_money(order.total_amount)}</td>"
+            f"<td class='num'>{_bill_amount(order.total_amount)}</td>"
             "</tr>"
         )
     if not line_rows:
@@ -401,10 +480,32 @@ def _statement_html_v2(statement: CustomerStatementRun, customer: Customer | Non
             "<td>1</td><td></td>"
             f"<td>{_h(', '.join(statement.selected_cylinder_nos))}</td>"
             "<td class='product-name'>Selected cylinders</td><td></td><td></td><td></td><td></td><td></td><td></td>"
-            f"<td class='num'>{_money(statement.current_receivable)}</td>"
+            f"<td class='num'>{_bill_amount(statement.current_receivable)}</td>"
             "</tr>"
         )
     rows_html = "".join(line_rows)
+    bill_date = date.today()
+    vat_amount = _round_2(_decimal(statement.current_receivable) * VAT_RATE)
+    total_receivable = _round_2(_decimal(statement.current_receivable) + vat_amount)
+    header_html = (
+        _document_header("Invoice/Bill", statement.statement_no, bill_date, customer)
+        if with_header
+        else f"""
+    <header class="doc-header compact-header">
+      <div class="doc-title">Invoice/Bill</div>
+      <div class="doc-meta">
+        <div>
+          <div>Name: <strong>{_h(customer.name if customer else "-")}</strong></div>
+          <div>Address: {_h(customer.address if customer and customer.address else "")}</div>
+        </div>
+        <div class="doc-meta-right">
+          <div>No. {_h(statement.statement_no)}</div>
+          <div>Date: {_h(bill_date.isoformat())}</div>
+        </div>
+      </div>
+    </header>
+"""
+    )
     return f"""
 <!doctype html>
 <html>
@@ -423,6 +524,7 @@ def _statement_html_v2(statement: CustomerStatementRun, customer: Customer | Non
     .company-en {{ color: #3f2f5f; font-size: 23px; font-weight: 800; }}
     .company-zh {{ font-size: 24px; font-weight: 800; margin-top: 3px; }}
     .doc-title {{ font-size: 28px; font-weight: 800; letter-spacing: 2px; margin-top: 4px; }}
+    .compact-header .doc-title {{ text-align: center; margin-top: 0; }}
     .doc-meta {{ display: flex; justify-content: space-between; gap: 28px; margin-top: 8px; font-size: 13px; }}
     .doc-meta-right {{ min-width: 190px; }}
     table {{ width: 100%; border-collapse: collapse; margin-top: 8px; }}
@@ -438,22 +540,21 @@ def _statement_html_v2(statement: CustomerStatementRun, customer: Customer | Non
 </head>
 <body>
   <section class="bill">
-    {_document_header("Invoice/Bill", statement.statement_no, date.today(), customer)}
+    {header_html}
     <table>
       <thead>
         <tr><th>SI</th><th>Date</th><th>Cylinder No.</th><th>Product Name</th><th colspan="2">Size(cm)</th><th>Rate/cm2</th><th>Price/Pc</th><th>New QTY</th><th>Old QTY</th><th>Amount(TK)</th></tr>
       </thead>
       <tbody>{rows_html}</tbody>
-      <tfoot><tr><th colspan="8">Total</th><th>{_quantity_text(total_new)}</th><th>{_quantity_text(total_old)}</th><th class="num">{_money(statement.current_receivable)}</th></tr></tfoot>
+      <tfoot><tr><th colspan="8">Total</th><th>{_quantity_text(total_new)}</th><th>{_quantity_text(total_old)}</th><th class="num">{_bill_amount(statement.current_receivable)}</th></tr></tfoot>
     </table>
     <table class="summary">
       <tbody>
-        <tr><th>Previous balance(TK)</th><td class="num">{_money(statement.previous_balance)}</td></tr>
-        <tr><th>Previous Paid (TK)</th><td class="num">{_money(statement.received_amount)}</td></tr>
-        <tr><th>Total Receivable(TK)</th><td class="num">{_money(statement.due_amount)}</td></tr>
+        <tr><th>VAT 15%</th><td class="num">{_bill_decimal(vat_amount)}</td></tr>
+        <tr><th>Total Receivable(TK)</th><td class="num">{_bill_decimal(total_receivable)}</td></tr>
       </tbody>
     </table>
-    <div class="amount-words">Total In Receivable: {_money(statement.due_amount)} TK ONLY</div>
+    <div class="amount-words">Total In Receivable: {_bill_decimal(total_receivable)} TK ONLY</div>
     <div class="bank">Payment Bank Details: Company Name: Bangla Shanghai Plate Making Limited. Bank Name: Dutch Bangla Bank PLC. Bank Account No: 101-308-0001081 Branch: Local Office, Dhaka Routing No: 090273889</div>
     <div class="signature">Authorized Signature: __________________________</div>
   </section>
@@ -485,7 +586,8 @@ def _receipt_snapshot(receipt: ReceiptDailyEntry, customer: Customer | None) -> 
     }
 
 
-def _statement_snapshot(statement: CustomerStatementRun, customer: Customer | None) -> dict:
+def _statement_snapshot(statement: CustomerStatementRun, customer: Customer | None, *, with_header: bool = True) -> dict:
+    vat_amount = _round_2(_decimal(statement.current_receivable) * VAT_RATE)
     return {
         "statement_no": statement.statement_no,
         "customer_id": statement.customer_id,
@@ -496,6 +598,13 @@ def _statement_snapshot(statement: CustomerStatementRun, customer: Customer | No
         "current_receivable": statement.current_receivable,
         "received_amount": statement.received_amount,
         "due_amount": statement.due_amount,
+        "vat_rate": float(VAT_RATE),
+        "vat_amount": float(vat_amount),
+        "total_receivable_with_vat": float(_round_2(_decimal(statement.current_receivable) + vat_amount)),
+        "with_header": with_header,
+        "price_approval_status": statement.price_approval_status,
+        "price_approved_at": statement.price_approved_at,
+        "price_approved_by": statement.price_approved_by,
         "status": statement.status,
     }
 
@@ -514,52 +623,144 @@ def _allocation_text(allocations: list[ReceiptAllocation]) -> str:
     )
 
 
+def _order_cylinder_text(order: SalesOrder | None) -> str:
+    if order is None:
+        return ""
+    return ", ".join(sorted(_order_cylinder_nos(order)))
+
+
+def _receivable_reads(db: Session, receivables: list[Receivable]) -> list[ReceivableRead]:
+    order_ids = {receivable.sales_order_id for receivable in receivables if receivable.sales_order_id}
+    orders = {}
+    if order_ids:
+        orders = {order.id: order for order in db.query(SalesOrder).filter(SalesOrder.id.in_(list(order_ids))).all()}
+    return [
+        ReceivableRead.model_validate(receivable).model_copy(
+            update={"cylinder_no": _order_cylinder_text(orders.get(receivable.sales_order_id))}
+        )
+        for receivable in receivables
+    ]
+
+
+def _filter_receivable_reads(db: Session, reads: list[ReceivableRead], keyword: str | None) -> list[ReceivableRead]:
+    needle = str(keyword or "").strip().lower()
+    if not needle:
+        return reads
+    customer_names = _customer_name_map(db, {item.customer_id for item in reads})
+    order_ids = {item.sales_order_id for item in reads if item.sales_order_id}
+    orders = {}
+    if order_ids:
+        orders = {order.id: order for order in db.query(SalesOrder).filter(SalesOrder.id.in_(list(order_ids))).all()}
+
+    def haystack(item: ReceivableRead) -> str:
+        order = orders.get(item.sales_order_id)
+        parts = [
+            item.receivable_no,
+            item.cylinder_no,
+            item.source_type,
+            item.finance_status,
+            item.status,
+            item.remark,
+            customer_names.get(item.customer_id),
+            order.order_no if order else None,
+            order.product_summary if order else None,
+        ]
+        return " ".join(str(part or "").lower() for part in parts)
+
+    return [item for item in reads if needle in haystack(item)]
+
+
 @router.get("/receivables", response_model=PageResponse[ReceivableRead])
 def list_receivables(
     status_filter: str | None = None,
     sales_order_id: UUID | None = None,
+    customer_id: UUID | None = None,
+    cylinder_no: str | None = None,
+    keyword: str | None = None,
+    overdue_only: bool = False,
+    include_archived: bool = False,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
-    _=Depends(require_permission("finance:receivable:view")),
+    current_user: User = Depends(require_permission("finance:receivable:view")),
 ) -> PageResponse[ReceivableRead]:
+    _assert_receivable_scope(current_user, sales_order_id)
     query = db.query(Receivable).filter(Receivable.deleted_at.is_(None))
-    if status_filter:
+    if status_filter == "archived":
+        query = query.filter(Receivable.status == "archived")
+    elif status_filter:
         query = query.filter(Receivable.finance_status == status_filter)
+    elif not include_archived:
+        query = query.filter(Receivable.status != "archived")
     if sales_order_id:
         query = query.filter(Receivable.sales_order_id == sales_order_id)
-    total = query.count()
-    items = query.order_by(Receivable.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    if customer_id:
+        query = query.filter(Receivable.customer_id == customer_id)
+    if overdue_only:
+        query = query.filter(Receivable.balance_amount > 0, Receivable.due_date < date.today())
+    ordered = query.order_by(Receivable.created_at.desc())
+    if cylinder_no or keyword:
+        all_items = ordered.all()
+        reads = _receivable_reads(db, all_items)
+        if cylinder_no:
+            needle = cylinder_no.strip().lower()
+            reads = [item for item in reads if needle in (item.cylinder_no or "").lower()]
+        reads = _filter_receivable_reads(db, reads, keyword)
+        total = len(reads)
+        items = reads[(page - 1) * page_size : page * page_size]
+    else:
+        total = query.count()
+        rows = ordered.offset((page - 1) * page_size).limit(page_size).all()
+        items = _receivable_reads(db, rows)
     return PageResponse(items=items, total=total, page=page, page_size=page_size)
 
 
 @router.get("/receivables/export")
 def export_receivables(
     status_filter: str | None = None,
+    customer_id: UUID | None = None,
+    cylinder_no: str | None = None,
+    keyword: str | None = None,
+    overdue_only: bool = False,
+    include_archived: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("report:export")),
 ):
+    _assert_finance_module_role(current_user)
     query = db.query(Receivable).filter(Receivable.deleted_at.is_(None))
-    if status_filter:
+    if status_filter == "archived":
+        query = query.filter(Receivable.status == "archived")
+    elif status_filter:
         query = query.filter(Receivable.finance_status == status_filter)
+    elif not include_archived:
+        query = query.filter(Receivable.status != "archived")
+    if customer_id:
+        query = query.filter(Receivable.customer_id == customer_id)
+    if overdue_only:
+        query = query.filter(Receivable.balance_amount > 0, Receivable.due_date < date.today())
     receivables = query.order_by(Receivable.created_at.desc()).all()
+    reads = _receivable_reads(db, receivables)
+    if cylinder_no:
+        needle = cylinder_no.strip().lower()
+        reads = [item for item in reads if needle in (item.cylinder_no or "").lower()]
+    reads = _filter_receivable_reads(db, reads, keyword)
     log_operation(
         db,
         user_id=current_user.id,
         module="finance",
         action="export_receivables",
         target_type="receivable",
-        after_data={"count": len(receivables)},
+        after_data={"count": len(reads)},
     )
     db.commit()
     return build_xlsx_response(
         "receivables.xlsx",
-        ["应收编号", "来源", "订单ID", "应收金额(Tk)", "已收金额(Tk)", "未收金额(Tk)", "到期日", "开票状态", "财务状态", "状态", "备注"],
+        ["应收编号", "来源", "版号", "应收金额(Tk)", "已收金额(Tk)", "未收金额(Tk)", "到期日", "开票状态", "财务状态", "状态", "备注"],
         [
             [
                 receivable.receivable_no,
                 receivable.source_type,
-                str(receivable.sales_order_id) if receivable.sales_order_id else "",
+                receivable.cylinder_no or "",
                 float(receivable.amount),
                 float(receivable.received_amount),
                 float(receivable.balance_amount),
@@ -569,7 +770,7 @@ def export_receivables(
                 receivable.status,
                 receivable.remark or "",
             ]
-            for receivable in receivables
+            for receivable in reads
         ],
     )
 
@@ -580,8 +781,8 @@ def create_receivable_from_delivery(
     payload: CreateReceivableRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("finance:receivable:create")),
-) -> Receivable:
-    delivery = db.get(DeliveryOrder, delivery_id)
+) -> ReceivableRead:
+    delivery = db.query(DeliveryOrder).filter(DeliveryOrder.id == delivery_id).with_for_update().first()
     if delivery is None or delivery.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery order not found.")
     if delivery.status != "signed":
@@ -629,16 +830,56 @@ def create_receivable_from_delivery(
     )
     db.commit()
     db.refresh(receivable)
-    return receivable
+    return _receivable_reads(db, [receivable])[0]
 
 
 @router.get("/receivables/{receivable_id}/payments", response_model=list[PaymentRead])
 def list_payments(
     receivable_id: UUID,
     db: Session = Depends(get_db),
-    _=Depends(require_permission("finance:receivable:view")),
+    current_user: User = Depends(require_permission("finance:receivable:view")),
 ) -> list[Payment]:
+    _assert_finance_module_role(current_user)
     return db.query(Payment).filter(Payment.receivable_id == receivable_id, Payment.deleted_at.is_(None)).order_by(Payment.payment_date.desc()).all()
+
+
+@router.post("/receivables/{receivable_id}/archive", response_model=ReceivableRead)
+def archive_receivable(
+    receivable_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("finance:adjust")),
+) -> ReceivableRead:
+    receivable = db.query(Receivable).filter(Receivable.id == receivable_id).with_for_update().first()
+    if receivable is None or receivable.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receivable not found.")
+    if receivable.status == "archived":
+        return _receivable_reads(db, [receivable])[0]
+    if receivable.status == "cancelled":
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Cancelled receivable cannot be archived.")
+    if _decimal(receivable.balance_amount) > 0:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Only fully paid receivables can be archived.")
+
+    receivable.status = "archived"
+    receivable.finance_status = "closed"
+    order = db.get(SalesOrder, receivable.sales_order_id) if receivable.sales_order_id else None
+    if order and order.deleted_at is None:
+        order.status = OrderStatus.ARCHIVED
+
+    log_operation(
+        db,
+        user_id=current_user.id,
+        module="finance",
+        action="archive_receivable",
+        target_type="receivable",
+        target_id=receivable.id,
+        after_data={
+            "receivable_no": receivable.receivable_no,
+            "sales_order_id": str(receivable.sales_order_id) if receivable.sales_order_id else None,
+        },
+    )
+    db.commit()
+    db.refresh(receivable)
+    return _receivable_reads(db, [receivable])[0]
 
 
 @router.post("/receivables/{receivable_id}/payments", response_model=PaymentRead, status_code=status.HTTP_201_CREATED)
@@ -648,12 +889,28 @@ def create_payment(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("finance:payment:create")),
 ) -> Payment:
-    receivable = db.get(Receivable, receivable_id)
+    receivable = db.query(Receivable).filter(Receivable.id == receivable_id).with_for_update().first()
     if receivable is None or receivable.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receivable not found.")
+    if receivable.status in {"cancelled", "archived"}:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Cancelled or archived receivable cannot accept payments.")
     amount = Decimal(str(payload.amount))
     if amount > receivable.balance_amount:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Payment amount cannot exceed receivable balance.")
+    reference_no = payload.reference_no.strip() if payload.reference_no else None
+    if reference_no:
+        duplicate = (
+            db.query(Payment)
+            .filter(
+                Payment.receivable_id == receivable.id,
+                Payment.reference_no == reference_no,
+                Payment.deleted_at.is_(None),
+                Payment.reversed_payment_id.is_(None),
+            )
+            .first()
+        )
+        if duplicate:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Reference no already exists for this receivable.")
 
     payment = Payment(
         payment_no=generate_number("PAY"),
@@ -662,7 +919,7 @@ def create_payment(
         amount=amount,
         payment_date=payload.payment_date,
         payment_method=payload.payment_method,
-        reference_no=payload.reference_no,
+        reference_no=reference_no,
         remark=payload.remark,
     )
     receivable.received_amount = Decimal(str(receivable.received_amount or 0)) + amount
@@ -702,8 +959,9 @@ def list_daily_receipts(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
-    _=Depends(require_permission("finance:receivable:view")),
+    current_user: User = Depends(require_permission("finance:receivable:view")),
 ) -> PageResponse[ReceiptDailyEntryRead]:
+    _assert_finance_module_role(current_user)
     query = db.query(ReceiptDailyEntry).options(selectinload(ReceiptDailyEntry.allocations)).filter(ReceiptDailyEntry.deleted_at.is_(None))
     if customer_id:
         query = query.filter(ReceiptDailyEntry.customer_id == customer_id)
@@ -730,6 +988,7 @@ def export_daily_receipts(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("report:export")),
 ):
+    _assert_finance_module_role(current_user)
     query = db.query(ReceiptDailyEntry).options(selectinload(ReceiptDailyEntry.allocations)).filter(ReceiptDailyEntry.deleted_at.is_(None))
     if customer_id:
         query = query.filter(ReceiptDailyEntry.customer_id == customer_id)
@@ -763,11 +1022,11 @@ def export_daily_receipts(
             "Cash Amount",
             "Bank Amount",
             "Other Amount",
-            "Total Amount",
-            "Status",
-            "Allocations",
             "Salesman",
-            "Payee",
+            "VAT",
+            "AIT",
+            "Total Tax",
+            "Total Amount",
             "Remark",
         ],
         [
@@ -779,11 +1038,11 @@ def export_daily_receipts(
                 float(receipt.cash_amount),
                 float(receipt.bank_amount),
                 float(receipt.other_amount),
-                float(receipt.total_amount),
-                receipt.status,
-                _allocation_text(receipt.allocations),
                 receipt.salesman_name or "",
-                receipt.payee_name or "",
+                0,
+                0,
+                0,
+                float(receipt.total_amount),
                 receipt.remark or "",
             ]
             for receipt in receipts
@@ -807,6 +1066,44 @@ def create_daily_receipt(
     if allocation_total != total_amount:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Allocation total must match receipt total.")
 
+    allocations: list[ReceiptAllocation] = []
+    for allocation in payload.allocations:
+        cylinder_no = allocation.cylinder_no.strip()
+        accounting_month = _month_start(allocation.accounting_month or payload.received_date)
+        sales_order_id = allocation.sales_order_id
+        if sales_order_id:
+            order = db.get(SalesOrder, sales_order_id)
+            if order is None or order.deleted_at is not None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Allocation sales order not found.")
+            if order.customer_id != payload.customer_id:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Allocation order does not belong to the selected customer.")
+            if cylinder_no not in _order_cylinder_nos(order):
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Cylinder no does not belong to the selected order.")
+        else:
+            matches = _matching_orders_by_cylinder(
+                db,
+                cylinder_no=cylinder_no,
+                accounting_month=accounting_month,
+                customer_id=payload.customer_id,
+            )
+            if len(matches) == 1:
+                sales_order_id = matches[0].id
+            elif not matches:
+                other_matches = _matching_orders_by_cylinder(db, cylinder_no=cylinder_no, accounting_month=accounting_month)
+                if any(order.customer_id != payload.customer_id for order in other_matches):
+                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Cylinder no belongs to another customer in this accounting month.")
+
+        allocations.append(
+            ReceiptAllocation(
+                customer_id=payload.customer_id,
+                sales_order_id=sales_order_id,
+                cylinder_no=cylinder_no,
+                accounting_month=accounting_month,
+                amount=allocation.amount,
+                remark=allocation.remark,
+            )
+        )
+
     entry = ReceiptDailyEntry(
         receipt_no=generate_number("RCPT"),
         customer_id=payload.customer_id,
@@ -821,17 +1118,7 @@ def create_daily_receipt(
         abstract=payload.abstract,
         status="received",
         remark=payload.remark,
-        allocations=[
-            ReceiptAllocation(
-                customer_id=payload.customer_id,
-                sales_order_id=allocation.sales_order_id,
-                cylinder_no=allocation.cylinder_no.strip(),
-                accounting_month=_month_start(allocation.accounting_month or payload.received_date),
-                amount=allocation.amount,
-                remark=allocation.remark,
-            )
-            for allocation in payload.allocations
-        ],
+        allocations=allocations,
     )
     db.add(entry)
     db.flush()
@@ -948,8 +1235,9 @@ def list_monthly_receipts(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
-    _=Depends(require_permission("finance:receivable:view")),
+    current_user: User = Depends(require_permission("finance:receivable:view")),
 ) -> PageResponse[MonthlyPaymentSummaryRead]:
+    _assert_finance_module_role(current_user)
     query = db.query(MonthlyPaymentSummary).filter(MonthlyPaymentSummary.deleted_at.is_(None))
     if accounting_month:
         query = query.filter(MonthlyPaymentSummary.accounting_month == _month_start(accounting_month))
@@ -970,6 +1258,7 @@ def export_monthly_receipts(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("report:export")),
 ):
+    _assert_finance_module_role(current_user)
     query = db.query(MonthlyPaymentSummary).filter(MonthlyPaymentSummary.deleted_at.is_(None))
     if accounting_month:
         query = query.filter(MonthlyPaymentSummary.accounting_month == _month_start(accounting_month))
@@ -1026,6 +1315,7 @@ def close_monthly_receipts(
     current_user: User = Depends(require_permission("finance:month_close")),
 ) -> list[MonthlyPaymentSummary]:
     month = _month_start(payload.accounting_month)
+    received_by_key: dict[tuple[UUID, str], Decimal] = {}
     allocation_query = (
         db.query(
             ReceiptAllocation.customer_id,
@@ -1043,16 +1333,50 @@ def close_monthly_receipts(
     if payload.customer_id:
         allocation_query = allocation_query.filter(ReceiptAllocation.customer_id == payload.customer_id)
 
-    summaries: list[MonthlyPaymentSummary] = []
     for row in allocation_query.all():
-        receivable_amount = _sum_order_receivable(db, row.customer_id, row.cylinder_no, month)
-        received_amount = _decimal(row.received_amount)
-        due_amount = _previous_due(db, row.customer_id, row.cylinder_no, month) + receivable_amount - received_amount
+        received_by_key[(row.customer_id, row.cylinder_no)] = _decimal(row.received_amount)
+
+    summary_keys = set(received_by_key)
+    order_query = db.query(SalesOrder).filter(
+        SalesOrder.deleted_at.is_(None),
+        SalesOrder.order_date >= month,
+        SalesOrder.order_date < _next_month(month),
+    )
+    if payload.customer_id:
+        order_query = order_query.filter(SalesOrder.customer_id == payload.customer_id)
+    for order in order_query.all():
+        for cylinder_no in _order_cylinder_nos(order):
+            summary_keys.add((order.customer_id, cylinder_no))
+
+    previous_query = db.query(MonthlyPaymentSummary).filter(
+        MonthlyPaymentSummary.accounting_month < month,
+        MonthlyPaymentSummary.deleted_at.is_(None),
+    )
+    if payload.customer_id:
+        previous_query = previous_query.filter(MonthlyPaymentSummary.customer_id == payload.customer_id)
+    for previous in previous_query.all():
+        if _previous_due(db, previous.customer_id, previous.cylinder_no, month) != Decimal("0"):
+            summary_keys.add((previous.customer_id, previous.cylinder_no))
+
+    existing_query = db.query(MonthlyPaymentSummary).filter(
+        MonthlyPaymentSummary.accounting_month == month,
+        MonthlyPaymentSummary.deleted_at.is_(None),
+    )
+    if payload.customer_id:
+        existing_query = existing_query.filter(MonthlyPaymentSummary.customer_id == payload.customer_id)
+    for existing in existing_query.all():
+        summary_keys.add((existing.customer_id, existing.cylinder_no))
+
+    summaries: list[MonthlyPaymentSummary] = []
+    for customer_id, cylinder_no in sorted(summary_keys, key=lambda item: (str(item[0]), item[1])):
+        receivable_amount = _sum_order_receivable(db, customer_id, cylinder_no, month)
+        received_amount = received_by_key.get((customer_id, cylinder_no), Decimal("0"))
+        due_amount = _previous_due(db, customer_id, cylinder_no, month) + receivable_amount - received_amount
         summary = (
             db.query(MonthlyPaymentSummary)
             .filter(
-                MonthlyPaymentSummary.customer_id == row.customer_id,
-                MonthlyPaymentSummary.cylinder_no == row.cylinder_no,
+                MonthlyPaymentSummary.customer_id == customer_id,
+                MonthlyPaymentSummary.cylinder_no == cylinder_no,
                 MonthlyPaymentSummary.accounting_month == month,
                 MonthlyPaymentSummary.deleted_at.is_(None),
             )
@@ -1060,8 +1384,8 @@ def close_monthly_receipts(
         )
         if summary is None:
             summary = MonthlyPaymentSummary(
-                customer_id=row.customer_id,
-                cylinder_no=row.cylinder_no,
+                customer_id=customer_id,
+                cylinder_no=cylinder_no,
                 accounting_month=month,
             )
             db.add(summary)
@@ -1094,8 +1418,9 @@ def list_customer_statements(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
-    _=Depends(require_permission("finance:receivable:view")),
+    current_user: User = Depends(require_permission("finance:receivable:view")),
 ) -> PageResponse[CustomerStatementRead]:
+    _assert_finance_module_role(current_user)
     query = db.query(CustomerStatementRun).filter(CustomerStatementRun.deleted_at.is_(None))
     if customer_id:
         query = query.filter(CustomerStatementRun.customer_id == customer_id)
@@ -1116,6 +1441,7 @@ def export_customer_statements(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("report:export")),
 ):
+    _assert_finance_module_role(current_user)
     query = db.query(CustomerStatementRun).filter(CustomerStatementRun.deleted_at.is_(None))
     if customer_id:
         query = query.filter(CustomerStatementRun.customer_id == customer_id)
@@ -1146,6 +1472,9 @@ def export_customer_statements(
             "Current Receivable",
             "Received Amount",
             "Due Amount",
+            "Price Approval",
+            "Price Approved At",
+            "Price Approved By",
             "Status",
             "Printed At",
             "Remark",
@@ -1160,6 +1489,9 @@ def export_customer_statements(
                 float(statement.current_receivable),
                 float(statement.received_amount),
                 float(statement.due_amount),
+                statement.price_approval_status,
+                statement.price_approved_at.isoformat() if statement.price_approved_at else "",
+                str(statement.price_approved_by) if statement.price_approved_by else "",
                 statement.status,
                 statement.printed_at.isoformat() if statement.printed_at else "",
                 statement.remark or "",
@@ -1173,7 +1505,7 @@ def export_customer_statements(
 def create_customer_statement(
     payload: CustomerStatementCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("finance:receivable:view")),
+    current_user: User = Depends(require_permission("finance:month_close")),
 ) -> CustomerStatementRun:
     customer = db.get(Customer, payload.customer_id)
     if customer is None or customer.deleted_at is not None:
@@ -1206,6 +1538,7 @@ def create_customer_statement(
         received_amount=_decimal(received_amount),
         due_amount=due_amount,
         status="draft",
+        price_approval_status="pending",
         remark=payload.remark,
     )
     db.add(statement)
@@ -1224,26 +1557,58 @@ def create_customer_statement(
     return statement
 
 
+@router.post("/customer-statements/{statement_id}/approve-price", response_model=CustomerStatementRead)
+def approve_customer_statement_price(
+    statement_id: UUID,
+    remark: str | None = Query(default=None, max_length=255),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("finance:bill_price:approve")),
+) -> CustomerStatementRun:
+    _assert_bill_price_approver_role(current_user)
+    statement = db.get(CustomerStatementRun, statement_id)
+    if statement is None or statement.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Statement not found.")
+    statement.price_approval_status = "approved"
+    statement.price_approved_at = datetime.now(timezone.utc)
+    statement.price_approved_by = current_user.id
+    statement.price_approval_remark = remark
+    log_operation(
+        db,
+        user_id=current_user.id,
+        module="finance",
+        action="approve_customer_statement_price",
+        target_type="customer_statement",
+        target_id=statement.id,
+        after_data={"statement_no": statement.statement_no, "current_receivable": float(statement.current_receivable)},
+    )
+    db.commit()
+    db.refresh(statement)
+    return statement
+
+
 @router.get("/customer-statements/{statement_id}/print", response_class=HTMLResponse)
 def print_customer_statement(
     statement_id: UUID,
+    with_header: bool = Query(default=True),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("finance:receivable:view")),
+    current_user: User = Depends(require_permission("finance:receipt:print")),
 ) -> HTMLResponse:
     statement = db.get(CustomerStatementRun, statement_id)
     if statement is None or statement.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Statement not found.")
+    if statement.price_approval_status != "approved":
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Bill price must be approved by boss/admin before printing.")
     statement.printed_at = datetime.now(timezone.utc)
     statement.status = "printed"
     customer = db.get(Customer, statement.customer_id)
-    html = _statement_html_v2(statement, customer, db)
+    html = _statement_html_v2(statement, customer, db, with_header=with_header)
     print_job = record_print_job(
         db,
         document_type="customer_statement",
         target_type="customer_statement",
         target_id=statement.id,
         printed_by=current_user.id,
-        snapshot=_statement_snapshot(statement, customer),
+        snapshot=_statement_snapshot(statement, customer, with_header=with_header),
         html_snapshot=html,
     )
     log_operation(
@@ -1253,7 +1618,7 @@ def print_customer_statement(
         action="print_customer_statement",
         target_type="customer_statement",
         target_id=statement.id,
-        after_data={"statement_no": statement.statement_no, "print_no": print_job.print_no},
+        after_data={"statement_no": statement.statement_no, "print_no": print_job.print_no, "with_header": with_header},
     )
     db.commit()
     return HTMLResponse(html)

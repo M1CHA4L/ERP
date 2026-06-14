@@ -25,10 +25,25 @@ from app.models.production import (
     WorkOrderStep,
 )
 from app.models.rbac import Permission, Role, User, role_permissions, user_roles
-from app.models.sales import SalesOrder, SalesOrderItem
+from app.models.sales import EntrustLayoutTemplate, PlateNumberReservation, SalesOrder, SalesOrderItem
+from app.models.workflow_v2 import (
+    AbnormalProcessRecord,
+    EpinBatch,
+    FinanceBill,
+    MakingAssignment,
+    OrderWorkflow,
+    OrderWorkflowNode,
+    PreOrder,
+    ProductionTask,
+    SignRecord,
+    WorkflowEdge,
+    WorkflowNode,
+    WorkflowTemplate,
+)
 
 __all__ = [
     "Base",
+    "AbnormalProcessRecord",
     "CostRecord",
     "CustomerStatementRun",
     "Customer",
@@ -44,6 +59,7 @@ __all__ = [
     "OperationLog",
     "Payment",
     "Permission",
+    "PlateNumberReservation",
     "PrintJob",
     "ProcessRecord",
     "ProcessRoute",
@@ -55,9 +71,21 @@ __all__ = [
     "ReceiptDailyEntry",
     "ReworkRecord",
     "Role",
+    "EntrustLayoutTemplate",
+    "EpinBatch",
+    "FinanceBill",
+    "MakingAssignment",
+    "OrderWorkflow",
+    "OrderWorkflowNode",
+    "PreOrder",
+    "ProductionTask",
     "SalesOrder",
     "SalesOrderItem",
+    "SignRecord",
     "User",
+    "WorkflowEdge",
+    "WorkflowNode",
+    "WorkflowTemplate",
     "WorkOrder",
     "WorkOrderStep",
     "role_permissions",

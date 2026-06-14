@@ -18,6 +18,7 @@ class UserProfile(BaseModel):
     id: UUID
     username: str
     real_name: str
+    department: str | None = None
     roles: list[str]
     permissions: list[str]
     device_mac_address: str | None = None

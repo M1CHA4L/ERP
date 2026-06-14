@@ -4,6 +4,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.finance import Payment, Receivable
+from app.models.inventory import InventoryLot, InventoryTransaction
 from app.models.logistics import DeliveryOrder
 from app.models.production import InspectionRecord, ProcessRecord, ReworkRecord, WorkOrder, WorkOrderStep
 from app.models.sales import SalesOrder
@@ -244,6 +245,38 @@ def build_sales_order_timeline(db: Session, order: SalesOrder) -> list[TimelineI
                 entity_type="delivery_order",
                 entity_id=delivery.id,
             )
+
+    material_uses = (
+        db.query(InventoryTransaction, InventoryLot.lot_no)
+        .join(InventoryLot, InventoryTransaction.lot_id == InventoryLot.id)
+        .filter(
+            InventoryTransaction.sales_order_id == order.id,
+            InventoryTransaction.movement_type == "issue",
+            InventoryTransaction.quantity < 0,
+            InventoryTransaction.deleted_at.is_(None),
+            InventoryLot.owner_type == "customer",
+            InventoryLot.deleted_at.is_(None),
+        )
+        .order_by(InventoryTransaction.created_at.asc())
+        .all()
+    )
+    for transaction, lot_no in material_uses:
+        quantity = abs(float(transaction.quantity))
+        cylinder_no = f"，版号 {transaction.cylinder_no}" if transaction.cylinder_no else ""
+        _append(
+            items,
+            occurred_at=transaction.created_at,
+            category="material",
+            title=f"使用客户来料 {lot_no}",
+            description=(
+                f"{transaction.product_name} {transaction.specification or ''}，"
+                f"使用 {quantity:g}{transaction.unit}，仓库 {transaction.warehouse_name}{cylinder_no}"
+            ),
+            status=transaction.status,
+            entity_type="inventory_transaction",
+            entity_id=transaction.id,
+            meta={"lot_no": lot_no, "movement_no": transaction.movement_no},
+        )
 
     receivables = (
         db.query(Receivable)

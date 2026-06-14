@@ -5,7 +5,7 @@
         <el-select v-model="customerFilter" filterable clearable placeholder="客户筛选">
           <el-option v-for="customer in customers" :key="customer.id" :label="customer.name" :value="customer.id" />
         </el-select>
-        <el-input v-model="productFilter" placeholder="品名筛选" clearable />
+        <el-input v-model="productFilter" placeholder="客户 / 品名 / 单号 / 版号" clearable :prefix-icon="Search" />
         <el-button :icon="Refresh" @click="loadAll">刷新</el-button>
       </div>
       <div class="toolbar-left">
@@ -225,7 +225,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Minus, Plus, Refresh, Tickets } from '@element-plus/icons-vue'
+import { Minus, Plus, Refresh, Search, Tickets } from '@element-plus/icons-vue'
 import { apiClient } from '../api/client'
 import type { Customer, CylinderStock, InventoryLot, InventoryTransaction, PageResponse } from '../api/types'
 import { formatCurrency } from '../utils/format'
@@ -283,15 +283,23 @@ function customerName(customerId: string) {
 }
 
 async function loadCustomers() {
-  const { data } = await apiClient.get<PageResponse<Customer>>('/customers', { params: { page_size: 100 } })
-  customers.value = data.items
+  const items: Customer[] = []
+  let page = 1
+  let total = 0
+  do {
+    const { data } = await apiClient.get<PageResponse<Customer>>('/customers', { params: { page, page_size: 100 } })
+    items.push(...data.items)
+    total = data.total
+    page += 1
+  } while (items.length < total)
+  customers.value = items
 }
 
 async function loadLots() {
   const { data } = await apiClient.get<PageResponse<InventoryLot>>('/inventory/lots', {
     params: {
       customer_id: customerFilter.value || undefined,
-      product_name: productFilter.value || undefined,
+      keyword: productFilter.value || undefined,
       page_size: 80
     }
   })
@@ -302,7 +310,7 @@ async function loadTransactions() {
   const { data } = await apiClient.get<PageResponse<InventoryTransaction>>('/inventory/transactions', {
     params: {
       customer_id: customerFilter.value || undefined,
-      product_name: productFilter.value || undefined,
+      keyword: productFilter.value || undefined,
       page_size: 80
     }
   })
@@ -313,6 +321,7 @@ async function loadCylinders() {
   const { data } = await apiClient.get<PageResponse<CylinderStock>>('/inventory/cylinder-stocks', {
     params: {
       customer_id: customerFilter.value || undefined,
+      keyword: productFilter.value || undefined,
       page_size: 80
     }
   })

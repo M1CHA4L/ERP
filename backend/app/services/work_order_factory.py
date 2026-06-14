@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy import text
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.process import ProcessRoute
@@ -15,24 +16,46 @@ def create_work_orders_from_sales_order(
     sales_order: SalesOrder,
     route_id: UUID | None = None,
 ) -> list[WorkOrder]:
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+        {"lock_key": f"sales_order_work_orders:{sales_order.id}"},
+    )
+    existing = (
+        db.query(WorkOrder.id)
+        .filter(WorkOrder.sales_order_id == sales_order.id, WorkOrder.deleted_at.is_(None))
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Work orders already exist for this order.")
+
     transition = can_generate_work_order(sales_order.status)
     if not transition.allowed:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=transition.reason)
 
     created: list[WorkOrder] = []
+    fallback_route = (
+        db.query(ProcessRoute)
+        .options(selectinload(ProcessRoute.steps))
+        .filter(ProcessRoute.status == "active")
+        .order_by(ProcessRoute.is_default.desc(), ProcessRoute.route_code.asc())
+        .first()
+    )
+    if fallback_route is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Active route not found.")
+
     for item in sales_order.items:
         effective_route_id = route_id or item.route_id or sales_order.route_id
         if effective_route_id is None:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Route is required.")
-
-        route = (
-            db.query(ProcessRoute)
-            .options(selectinload(ProcessRoute.steps))
-            .filter(ProcessRoute.id == effective_route_id, ProcessRoute.status == "active")
-            .first()
-        )
-        if route is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Active route not found.")
+            route = fallback_route
+        else:
+            route = (
+                db.query(ProcessRoute)
+                .options(selectinload(ProcessRoute.steps))
+                .filter(ProcessRoute.id == effective_route_id, ProcessRoute.status == "active")
+                .first()
+            )
+            if route is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Active route not found.")
 
         work_order = WorkOrder(
             work_order_no=generate_number("WO"),

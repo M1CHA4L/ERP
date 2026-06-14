@@ -2,7 +2,7 @@
   <section class="page-stack">
     <div class="toolbar">
       <div class="toolbar-left">
-        <strong>我的任务</strong>
+        <strong>工序任务</strong>
         <el-select v-model="statusFilter" placeholder="任务状态" clearable>
           <el-option label="待加工" value="pending_process" />
           <el-option label="加工中" value="processing" />
@@ -56,7 +56,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="!loading && tasks.length === 0" description="暂无任务" />
+      <el-empty v-if="!loading && tasks.length === 0" description="暂无工序任务" />
     </el-card>
 
     <el-dialog v-model="completeVisible" title="完成报工" width="420px">

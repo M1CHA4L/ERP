@@ -2,8 +2,13 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { clearSession, session } from '../stores/session'
 
+function defaultApiBaseUrl() {
+  if (typeof window === 'undefined') return 'http://localhost:8000/api/v1'
+  return `${window.location.protocol}//${window.location.hostname}:8000/api/v1`
+}
+
 export const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1',
+  baseURL: import.meta.env.VITE_API_BASE_URL || defaultApiBaseUrl(),
   timeout: 15000
 })
 

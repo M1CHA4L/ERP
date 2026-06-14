@@ -61,6 +61,7 @@ function categoryLabel(category: string) {
     record: '报工',
     inspection: '质检',
     rework: '返工',
+    material: '来料',
     delivery: '送货',
     finance: '财务'
   }
@@ -97,6 +98,7 @@ function statusType(status: string) {
 function timelineType(category: string, status?: string) {
   if (status && statusType(status) !== 'info') return statusType(status)
   if (category === 'finance') return 'success'
+  if (category === 'material') return 'success'
   if (category === 'inspection') return 'warning'
   if (category === 'rework') return 'danger'
   return 'primary'

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -25,6 +25,13 @@ class Customer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     address: Mapped[str | None] = mapped_column(String(255), nullable=True)
     salesperson_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     payment_terms_days: Mapped[int] = mapped_column(Integer, default=30)
+    payment_method: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    minimum_price: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
+    vat_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    ait_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    advance_percent: Mapped[float | None] = mapped_column(Numeric(8, 2), nullable=True)
+    lister: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    price_rules: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     credit_limit: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
     tax_no: Mapped[str | None] = mapped_column(String(64), nullable=True)
     office: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -44,4 +51,6 @@ class Customer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     @property
     def salesperson_name(self) -> str | None:
-        return self.salesperson.real_name if self.salesperson else None
+        if not self.salesperson:
+            return None
+        return self.salesperson.real_name or self.salesperson.username

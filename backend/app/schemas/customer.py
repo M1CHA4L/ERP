@@ -3,6 +3,18 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class CustomerPriceRule(BaseModel):
+    max_cm2: float | None = None
+    min_cm2: float | None = None
+    min_l: float | None = None
+    max_l: float | None = None
+    min_c: float | None = None
+    max_c: float | None = None
+    old_pcs: float | None = None
+    repair_chromium_pcs: float | None = None
+    special_cyl_price: float | None = None
+
+
 class CustomerBase(BaseModel):
     legacy_company_id: str | None = None
     name: str = Field(min_length=1, max_length=128)
@@ -15,6 +27,13 @@ class CustomerBase(BaseModel):
     address: str | None = None
     salesperson_id: UUID | None = None
     payment_terms_days: int = 30
+    payment_method: str | None = None
+    minimum_price: float | None = None
+    vat_enabled: bool = False
+    ait_enabled: bool = False
+    advance_percent: float | None = None
+    lister: str | None = None
+    price_rules: list[CustomerPriceRule] | None = Field(default_factory=list)
     credit_limit: float | None = None
     tax_no: str | None = None
     office: str | None = None
@@ -47,6 +66,13 @@ class CustomerUpdate(BaseModel):
     address: str | None = None
     salesperson_id: UUID | None = None
     payment_terms_days: int | None = None
+    payment_method: str | None = None
+    minimum_price: float | None = None
+    vat_enabled: bool | None = None
+    ait_enabled: bool | None = None
+    advance_percent: float | None = None
+    lister: str | None = None
+    price_rules: list[CustomerPriceRule] | None = None
     credit_limit: float | None = None
     tax_no: str | None = None
     office: str | None = None
